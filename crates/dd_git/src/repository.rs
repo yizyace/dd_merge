@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use gix::bstr::ByteSlice;
 
 use crate::commit::CommitInfo;
+use crate::diff::FileDiff;
 use crate::types::{BranchInfo, RemoteInfo, StashInfo, TagInfo};
 
 pub struct Repository {
@@ -124,6 +125,14 @@ impl Repository {
             });
         }
         Ok(commits)
+    }
+
+    pub fn diff_commit(&self, oid: &str) -> Result<Vec<FileDiff>> {
+        let workdir = self
+            .inner
+            .work_dir()
+            .context("repository has no working directory")?;
+        crate::diff::diff_commit(workdir, oid)
     }
 }
 
@@ -284,5 +293,35 @@ mod tests {
         let commits = repo.commits(2).unwrap();
         assert_eq!(commits[0].parent_oids.len(), 1);
         assert_eq!(commits[0].parent_oids[0], commits[1].oid);
+    }
+
+    #[test]
+    fn test_diff_commit_shows_modification() {
+        let (_dir, repo) = init_test_repo_with_commits(2);
+        let commits = repo.commits(2).unwrap();
+        let diffs = repo.diff_commit(&commits[0].oid).unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "file.txt");
+        assert!(!diffs[0].hunks.is_empty());
+        // Should have both additions and deletions
+        let has_addition = diffs[0].hunks[0]
+            .lines
+            .iter()
+            .any(|l| l.origin == crate::diff::LineOrigin::Addition);
+        let has_deletion = diffs[0].hunks[0]
+            .lines
+            .iter()
+            .any(|l| l.origin == crate::diff::LineOrigin::Deletion);
+        assert!(has_addition);
+        assert!(has_deletion);
+    }
+
+    #[test]
+    fn test_diff_root_commit() {
+        let (_dir, repo) = init_test_repo_with_commits(1);
+        let commits = repo.commits(1).unwrap();
+        let diffs = repo.diff_commit(&commits[0].oid).unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].path, "file.txt");
     }
 }
