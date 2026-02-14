@@ -1,0 +1,11 @@
+[package]
+name = "dd_core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dd_git = { path = "../dd_git" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+dirs = { workspace = true }

@@ -1,0 +1,8 @@
+[package]
+name = "dd_merge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dd_ui = { path = "../dd_ui" }
+dd_core = { path = "../dd_core" }
