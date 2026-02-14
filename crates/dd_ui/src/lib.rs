@@ -1,4 +1,6 @@
 pub mod app_view;
+pub mod repo_view;
+pub mod sidebar;
 pub mod theme;
 
 pub use app_view::AppView;

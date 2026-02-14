@@ -1,24 +1,37 @@
 use std::path::PathBuf;
 
 use gpui::prelude::*;
-use gpui::{actions, Context, PathPromptOptions, Window};
+use gpui::{actions, Context, Entity, PathPromptOptions, Window};
 use gpui_component::{button::Button, v_flex, ActiveTheme};
 
 use dd_core::{AppState, Session};
+
+use crate::repo_view::RepoView;
 
 actions!(dd_merge, [OpenRepository]);
 
 pub struct AppView {
     state: AppState,
+    repo_views: Vec<Entity<RepoView>>,
     error_message: Option<String>,
 }
 
 impl AppView {
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let state = Session::load().ok().flatten().unwrap_or_default();
+
+        let repo_views: Vec<_> = state
+            .repos
+            .iter()
+            .map(|tab| {
+                let path = tab.path.clone();
+                cx.new(|cx| RepoView::new(path, window, cx))
+            })
+            .collect();
 
         Self {
             state,
+            repo_views,
             error_message: None,
         }
     }
@@ -27,7 +40,7 @@ impl AppView {
         &self.state
     }
 
-    fn open_repository(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_repository(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -53,11 +66,14 @@ impl AppView {
         match dd_git::Repository::open(&path) {
             Ok(_) => {
                 self.error_message = None;
-                self.state.add_repo(path);
+                self.state.add_repo(path.clone());
+                let repo_view = cx.new(|cx| RepoView::new_without_window(path, cx));
+                self.repo_views.push(repo_view);
                 cx.notify();
             }
             Err(_) => {
-                self.error_message = Some(format!("{} is not a git repository", path.display()));
+                self.error_message =
+                    Some(format!("{} is not a git repository", path.display()));
                 cx.notify();
             }
         }
@@ -86,31 +102,6 @@ impl AppView {
             )
             .children(error.map(|msg| gpui::div().text_color(gpui::red()).child(msg)))
     }
-
-    fn render_repo_placeholder(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.state.active_tab;
-        let repo_name = self
-            .state
-            .repos
-            .get(active)
-            .map(|r| r.name.clone())
-            .unwrap_or_default();
-
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .child(
-                gpui::div()
-                    .text_xl()
-                    .child(format!("Repository: {}", repo_name)),
-            )
-            .child(
-                gpui::div()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Full 3-column layout coming soon"),
-            )
-    }
 }
 
 impl Render for AppView {
@@ -118,7 +109,15 @@ impl Render for AppView {
         let content = if self.state.repos.is_empty() {
             self.render_welcome(cx).into_any_element()
         } else {
-            self.render_repo_placeholder(cx).into_any_element()
+            let active = self
+                .state
+                .active_tab
+                .min(self.repo_views.len().saturating_sub(1));
+            if let Some(repo_view) = self.repo_views.get(active) {
+                repo_view.clone().into_any_element()
+            } else {
+                self.render_welcome(cx).into_any_element()
+            }
         };
 
         v_flex()
