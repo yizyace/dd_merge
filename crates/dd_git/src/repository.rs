@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use gix::bstr::ByteSlice;
 
+use crate::commit::CommitInfo;
 use crate::types::{BranchInfo, RemoteInfo, StashInfo, TagInfo};
 
 pub struct Repository {
@@ -77,6 +79,51 @@ impl Repository {
         }
         stashes.reverse();
         Ok(stashes)
+    }
+
+    pub fn commits(&self, limit: usize) -> Result<Vec<CommitInfo>> {
+        let head_id = self.inner.head_id()?;
+        let walk = self
+            .inner
+            .rev_walk([head_id])
+            .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                Default::default(),
+            ))
+            .all()?;
+
+        let mut commits = Vec::new();
+        for info in walk {
+            if commits.len() >= limit {
+                break;
+            }
+            let info = info?;
+            let commit = info.object()?;
+            let author = commit.author()?;
+            let message = commit.message()?;
+            let parent_oids: Vec<String> = info
+                .parent_ids
+                .iter()
+                .map(|id| id.to_hex().to_string())
+                .collect();
+
+            let oid = info.id.to_hex().to_string();
+            let short_oid = info.id.to_hex_with_len(7).to_string();
+
+            commits.push(CommitInfo {
+                oid,
+                short_oid,
+                author_name: author.name.to_string(),
+                author_email: author.email.to_string(),
+                date: author.time.seconds,
+                subject: message.title.to_str_lossy().trim().to_string(),
+                body: message
+                    .body
+                    .map(|b| b.to_str_lossy().trim().to_string())
+                    .unwrap_or_default(),
+                parent_oids,
+            });
+        }
+        Ok(commits)
     }
 }
 
@@ -166,5 +213,76 @@ mod tests {
         let (_dir, repo) = init_test_repo();
         let stashes = repo.stashes().unwrap();
         assert!(stashes.is_empty());
+    }
+
+    fn init_test_repo_with_commits(count: usize) -> (TempDir, Repository) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        for i in 0..count {
+            std::fs::write(path.join("file.txt"), format!("content {i}")).unwrap();
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(path)
+                .output()
+                .unwrap();
+            Command::new("git")
+                .args(["commit", "-m", &format!("commit {i}")])
+                .current_dir(path)
+                .output()
+                .unwrap();
+        }
+        let repo = Repository::open(path).unwrap();
+        (dir, repo)
+    }
+
+    #[test]
+    fn test_commits_returns_correct_count() {
+        let (_dir, repo) = init_test_repo_with_commits(5);
+        let commits = repo.commits(3).unwrap();
+        assert_eq!(commits.len(), 3);
+    }
+
+    #[test]
+    fn test_commits_newest_first() {
+        let (_dir, repo) = init_test_repo_with_commits(5);
+        let commits = repo.commits(5).unwrap();
+        assert_eq!(commits.len(), 5);
+        assert_eq!(commits[0].subject, "commit 4");
+        assert_eq!(commits[4].subject, "commit 0");
+    }
+
+    #[test]
+    fn test_commit_info_fields() {
+        let (_dir, repo) = init_test_repo_with_commits(1);
+        let commits = repo.commits(1).unwrap();
+        let commit = &commits[0];
+        assert_eq!(commit.subject, "commit 0");
+        assert_eq!(commit.author_name, "Test User");
+        assert_eq!(commit.author_email, "test@test.com");
+        assert_eq!(commit.short_oid.len(), 7);
+        assert!(commit.parent_oids.is_empty()); // first commit has no parent
+    }
+
+    #[test]
+    fn test_commits_have_parent_oids() {
+        let (_dir, repo) = init_test_repo_with_commits(2);
+        let commits = repo.commits(2).unwrap();
+        assert_eq!(commits[0].parent_oids.len(), 1);
+        assert_eq!(commits[0].parent_oids[0], commits[1].oid);
     }
 }
