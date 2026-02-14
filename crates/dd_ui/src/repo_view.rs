@@ -6,12 +6,16 @@ use gpui_component::{h_flex, v_flex, ActiveTheme};
 
 use dd_git::Repository;
 
+use crate::commit_list::CommitList;
 use crate::sidebar::{Sidebar, SidebarData};
+
+const COMMIT_LIMIT: usize = 100;
 
 pub struct RepoView {
     path: PathBuf,
     repo_name: String,
     sidebar: Entity<Sidebar>,
+    commit_list: Entity<CommitList>,
 }
 
 impl RepoView {
@@ -26,11 +30,13 @@ impl RepoView {
             .unwrap_or_else(|| "unknown".to_string());
 
         let sidebar = cx.new(|_cx| Sidebar::new_empty());
+        let commit_list = cx.new(|_cx| CommitList::new_empty());
 
         let mut view = Self {
             path,
             repo_name,
             sidebar,
+            commit_list,
         };
         view.load_repo_data(cx);
         view
@@ -42,6 +48,10 @@ impl RepoView {
 
     pub fn sidebar(&self) -> &Entity<Sidebar> {
         &self.sidebar
+    }
+
+    pub fn commit_list(&self) -> &Entity<CommitList> {
+        &self.commit_list
     }
 
     fn load_repo_data(&mut self, cx: &mut Context<Self>) {
@@ -62,6 +72,11 @@ impl RepoView {
                     cx,
                 );
             });
+
+            let commits = repo.commits(COMMIT_LIMIT).unwrap_or_default();
+            self.commit_list.update(cx, |list, cx| {
+                list.set_commits(commits, cx);
+            });
         }
     }
 }
@@ -72,19 +87,13 @@ impl Render for RepoView {
             .size_full()
             .child(self.sidebar.clone())
             .child(
-                // Commits column placeholder
+                // Commits column
                 v_flex()
                     .h_full()
                     .flex_1()
                     .border_r_1()
                     .border_color(cx.theme().border)
-                    .p_4()
-                    .child(
-                        gpui::div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Commits"),
-                    ),
+                    .child(self.commit_list.clone()),
             )
             .child(
                 // Diff column placeholder
