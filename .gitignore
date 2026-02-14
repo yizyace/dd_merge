@@ -1,0 +1,16 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# AI
+.claude/
+.copilot/
+.github/copilot/
