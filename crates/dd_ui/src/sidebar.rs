@@ -4,6 +4,8 @@ use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
 use dd_git::{BranchInfo, RemoteInfo, StashInfo, TagInfo};
 
+const SIDEBAR_WIDTH: f32 = 250.0;
+
 pub struct SidebarData {
     pub branches: Vec<BranchInfo>,
     pub remotes: Vec<RemoteInfo>,
@@ -111,8 +113,8 @@ impl Render for Sidebar {
 
         v_flex()
             .h_full()
-            .w(gpui::px(200.0))
-            .min_w(gpui::px(200.0))
+            .w(gpui::px(SIDEBAR_WIDTH))
+            .min_w(gpui::px(SIDEBAR_WIDTH))
             .border_r_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().sidebar)

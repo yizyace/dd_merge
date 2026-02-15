@@ -11,6 +11,7 @@ use crate::diff_view::DiffView;
 use crate::sidebar::{Sidebar, SidebarData};
 
 const COMMIT_LIMIT: usize = 100;
+const COMMIT_LIST_WIDTH: f32 = 400.0;
 
 pub struct RepoView {
     path: PathBuf,
@@ -123,7 +124,8 @@ impl Render for RepoView {
             .child(
                 v_flex()
                     .h_full()
-                    .flex_1()
+                    .w(gpui::px(COMMIT_LIST_WIDTH))
+                    .min_w(gpui::px(COMMIT_LIST_WIDTH))
                     .border_r_1()
                     .border_color(cx.theme().border)
                     .child(self.commit_list.clone()),
