@@ -456,6 +456,39 @@ fn diff_hunk_line_origins_are_valid() {
     assert!(has_deletion, "expected at least one Deletion line");
 }
 
+#[test]
+fn diff_inline_spans_populated_for_word_changes() {
+    let f = &*FIXTURE;
+    let repo = Repository::open(&f.path).unwrap();
+    // multi_file_oid changes "Hello, {}!" → "Hi, {}!" — a word-level change
+    let diffs = repo.diff_commit(&f.multi_file_oid).unwrap();
+    let lib_diff = diffs
+        .iter()
+        .find(|d| d.path.contains("lib.rs"))
+        .expect("expected lib.rs in multi-file diff");
+    let mut found_inline_spans = false;
+    for hunk in &lib_diff.hunks {
+        for line in &hunk.lines {
+            if !line.change_spans.is_empty() {
+                found_inline_spans = true;
+                // Verify spans are valid byte offsets into content
+                for span in &line.change_spans {
+                    assert!(
+                        span.start <= span.end && span.end <= line.content.len(),
+                        "invalid span {:?} for content of len {}",
+                        span,
+                        line.content.len()
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        found_inline_spans,
+        "expected inline change_spans on paired del/add lines in lib.rs"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Smoke tests against dd_merge repo
 // ---------------------------------------------------------------------------

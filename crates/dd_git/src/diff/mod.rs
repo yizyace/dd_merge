@@ -1,3 +1,4 @@
+mod inline;
 mod parse;
 
 use std::path::Path;
@@ -59,5 +60,9 @@ pub struct FileDiff {
 }
 
 pub(crate) fn diff_commit(workdir: &Path, oid: &str) -> Result<Vec<FileDiff>> {
-    parse::diff_commit(workdir, oid)
+    let mut files = parse::diff_commit(workdir, oid)?;
+    for file in &mut files {
+        inline::compute_inline_changes(&mut file.hunks);
+    }
+    Ok(files)
 }
