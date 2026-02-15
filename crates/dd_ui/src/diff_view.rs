@@ -67,34 +67,10 @@ impl DiffView {
     }
 
     fn render_hunk(&self, hunk: &Hunk, cx: &Context<Self>) -> impl IntoElement {
-        let mut old_line = hunk.old_start;
-        let mut new_line = hunk.new_start;
-
         let line_elements: Vec<_> = hunk
             .lines
             .iter()
-            .map(|line| {
-                let (old_num, new_num) = match line.origin {
-                    LineOrigin::Context => {
-                        let o = old_line;
-                        let n = new_line;
-                        old_line += 1;
-                        new_line += 1;
-                        (Some(o), Some(n))
-                    }
-                    LineOrigin::Addition => {
-                        let n = new_line;
-                        new_line += 1;
-                        (None, Some(n))
-                    }
-                    LineOrigin::Deletion => {
-                        let o = old_line;
-                        old_line += 1;
-                        (Some(o), None)
-                    }
-                };
-                self.render_diff_line(line, old_num, new_num, cx)
-            })
+            .map(|line| self.render_diff_line(line, cx))
             .collect();
 
         v_flex()
@@ -111,13 +87,7 @@ impl DiffView {
             .children(line_elements)
     }
 
-    fn render_diff_line(
-        &self,
-        line: &DiffLine,
-        old_num: Option<u32>,
-        new_num: Option<u32>,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    fn render_diff_line(&self, line: &DiffLine, cx: &Context<Self>) -> impl IntoElement {
         let (prefix, bg_color, text_color) = match line.origin {
             LineOrigin::Addition => (
                 "+",
@@ -136,10 +106,12 @@ impl DiffView {
             ),
         };
 
-        let old_str = old_num
+        let old_str = line
+            .old_line_no
             .map(|n| format!("{:>4}", n))
             .unwrap_or_else(|| "    ".to_string());
-        let new_str = new_num
+        let new_str = line
+            .new_line_no
             .map(|n| format!("{:>4}", n))
             .unwrap_or_else(|| "    ".to_string());
 
@@ -238,22 +210,37 @@ mod tests {
                     DiffLine {
                         origin: LineOrigin::Context,
                         content: "fn main() {".into(),
+                        old_line_no: Some(1),
+                        new_line_no: Some(1),
+                        change_spans: vec![],
                     },
                     DiffLine {
                         origin: LineOrigin::Deletion,
                         content: "    println!(\"hello\");".into(),
+                        old_line_no: Some(2),
+                        new_line_no: None,
+                        change_spans: vec![],
                     },
                     DiffLine {
                         origin: LineOrigin::Addition,
                         content: "    println!(\"hello world\");".into(),
+                        old_line_no: None,
+                        new_line_no: Some(2),
+                        change_spans: vec![],
                     },
                     DiffLine {
                         origin: LineOrigin::Addition,
                         content: "    println!(\"goodbye\");".into(),
+                        old_line_no: None,
+                        new_line_no: Some(3),
+                        change_spans: vec![],
                     },
                     DiffLine {
                         origin: LineOrigin::Context,
                         content: "}".into(),
+                        old_line_no: Some(3),
+                        new_line_no: Some(4),
+                        change_spans: vec![],
                     },
                 ],
             }],

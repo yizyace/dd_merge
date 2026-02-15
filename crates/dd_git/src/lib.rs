@@ -4,6 +4,6 @@ pub mod repository;
 pub mod types;
 
 pub use commit::CommitInfo;
-pub use diff::{DiffLine, FileDiff, FileStatus, Hunk, LineOrigin};
+pub use diff::{DiffLine, FileDiff, FileStatus, Hunk, InlineSpan, LineOrigin};
 pub use repository::Repository;
 pub use types::{BranchInfo, RemoteInfo, StashInfo, TagInfo};

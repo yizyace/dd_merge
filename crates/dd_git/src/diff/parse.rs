@@ -3,43 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LineOrigin {
-    Context,
-    Addition,
-    Deletion,
-}
-
-#[derive(Debug, Clone)]
-pub struct DiffLine {
-    pub origin: LineOrigin,
-    pub content: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct Hunk {
-    pub header: String,
-    pub old_start: u32,
-    pub old_count: u32,
-    pub new_start: u32,
-    pub new_count: u32,
-    pub lines: Vec<DiffLine>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileStatus {
-    Added,
-    Deleted,
-    Modified,
-    Renamed,
-}
-
-#[derive(Debug, Clone)]
-pub struct FileDiff {
-    pub path: String,
-    pub status: FileStatus,
-    pub hunks: Vec<Hunk>,
-}
+use super::{DiffLine, FileDiff, FileStatus, Hunk, LineOrigin};
 
 pub(crate) fn diff_commit(workdir: &Path, oid: &str) -> Result<Vec<FileDiff>> {
     anyhow::ensure!(
@@ -80,7 +44,7 @@ pub(crate) fn diff_commit(workdir: &Path, oid: &str) -> Result<Vec<FileDiff>> {
     parse_unified_diff(&stdout)
 }
 
-fn parse_unified_diff(input: &str) -> Result<Vec<FileDiff>> {
+pub fn parse_unified_diff(input: &str) -> Result<Vec<FileDiff>> {
     let mut files = Vec::new();
     let mut lines = input.lines().peekable();
 
@@ -96,6 +60,7 @@ fn parse_unified_diff(input: &str) -> Result<Vec<FileDiff>> {
 
         // Skip extended header lines (index, old mode, new mode, etc.)
         let mut file_status = status;
+        let mut old_path: Option<String> = None;
         while let Some(line) = lines.peek() {
             if line.starts_with("---") || line.starts_with("diff --git") || line.starts_with("@@") {
                 break;
@@ -105,8 +70,10 @@ fn parse_unified_diff(input: &str) -> Result<Vec<FileDiff>> {
                 file_status = FileStatus::Added;
             } else if header_line.starts_with("deleted file") {
                 file_status = FileStatus::Deleted;
-            } else if header_line.starts_with("rename from") || header_line.starts_with("rename to")
-            {
+            } else if let Some(from_path) = header_line.strip_prefix("rename from ") {
+                file_status = FileStatus::Renamed;
+                old_path = Some(from_path.to_string());
+            } else if header_line.starts_with("rename to") {
                 file_status = FileStatus::Renamed;
             }
         }
@@ -135,6 +102,7 @@ fn parse_unified_diff(input: &str) -> Result<Vec<FileDiff>> {
 
         files.push(FileDiff {
             path,
+            old_path,
             status: file_status,
             hunks,
         });
@@ -158,6 +126,8 @@ fn parse_hunk(lines: &mut std::iter::Peekable<std::str::Lines<'_>>) -> Hunk {
     let header_line = lines.next().unwrap_or_default();
     let (old_start, old_count, new_start, new_count) = parse_hunk_header(header_line);
 
+    let mut old_line = old_start;
+    let mut new_line = new_start;
     let mut hunk_lines = Vec::new();
     while let Some(line) = lines.peek() {
         if line.starts_with("@@") || line.starts_with("diff --git") {
@@ -168,17 +138,30 @@ fn parse_hunk(lines: &mut std::iter::Peekable<std::str::Lines<'_>>) -> Hunk {
             hunk_lines.push(DiffLine {
                 origin: LineOrigin::Addition,
                 content: content.to_string(),
+                old_line_no: None,
+                new_line_no: Some(new_line),
+                change_spans: Vec::new(),
             });
+            new_line += 1;
         } else if let Some(content) = line.strip_prefix('-') {
             hunk_lines.push(DiffLine {
                 origin: LineOrigin::Deletion,
                 content: content.to_string(),
+                old_line_no: Some(old_line),
+                new_line_no: None,
+                change_spans: Vec::new(),
             });
+            old_line += 1;
         } else if let Some(content) = line.strip_prefix(' ') {
             hunk_lines.push(DiffLine {
                 origin: LineOrigin::Context,
                 content: content.to_string(),
+                old_line_no: Some(old_line),
+                new_line_no: Some(new_line),
+                change_spans: Vec::new(),
             });
+            old_line += 1;
+            new_line += 1;
         } else if line.starts_with('\\') {
             // "\ No newline at end of file"
             continue;
@@ -186,7 +169,12 @@ fn parse_hunk(lines: &mut std::iter::Peekable<std::str::Lines<'_>>) -> Hunk {
             hunk_lines.push(DiffLine {
                 origin: LineOrigin::Context,
                 content: line.to_string(),
+                old_line_no: Some(old_line),
+                new_line_no: Some(new_line),
+                change_spans: Vec::new(),
             });
+            old_line += 1;
+            new_line += 1;
         }
     }
 
@@ -271,6 +259,19 @@ index abc..def 100644\n\
         assert_eq!(hunk.lines[1].origin, LineOrigin::Deletion);
         assert_eq!(hunk.lines[2].origin, LineOrigin::Addition);
         assert_eq!(hunk.lines[3].origin, LineOrigin::Context);
+
+        // Verify line numbers computed during parsing
+        assert_eq!(hunk.lines[0].old_line_no, Some(1));
+        assert_eq!(hunk.lines[0].new_line_no, Some(1));
+        assert_eq!(hunk.lines[1].old_line_no, Some(2)); // deletion
+        assert_eq!(hunk.lines[1].new_line_no, None);
+        assert_eq!(hunk.lines[2].old_line_no, None); // addition
+        assert_eq!(hunk.lines[2].new_line_no, Some(2));
+        assert_eq!(hunk.lines[3].old_line_no, Some(3));
+        assert_eq!(hunk.lines[3].new_line_no, Some(3));
+
+        // change_spans should be empty (populated later by inline diff)
+        assert!(hunk.lines.iter().all(|l| l.change_spans.is_empty()));
     }
 
     #[test]
@@ -329,6 +330,7 @@ rename to new_name.txt
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].status, FileStatus::Renamed);
         assert_eq!(files[0].path, "new_name.txt");
+        assert_eq!(files[0].old_path.as_deref(), Some("old_name.txt"));
         assert!(files[0].hunks.is_empty());
     }
 
