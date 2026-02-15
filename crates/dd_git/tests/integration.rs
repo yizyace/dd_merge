@@ -145,7 +145,7 @@ fn build_fixture() -> FixtureRepo {
     // ---- Rename ----
     git(&p, &["mv", "src/lib.rs", "src/library.rs"]);
     // Add a small content change so rename shows in diff with content
-    let lib_renamed = lib_hunk.to_owned() + "// renamed\n";
+    let lib_renamed = lib_hunk + "// renamed\n";
     fs::write(p.join("src/library.rs"), &lib_renamed).unwrap();
     git(&p, &["add", "."]);
     git(&p, &["commit", "-m", "refactor: rename lib to library"]);
@@ -166,18 +166,11 @@ fn build_fixture() -> FixtureRepo {
     // ---- Unicode commit message ----
     fs::write(
         p.join("README.md"),
-        "# Example\n\n\u{00dc}pd\u{00e4}ted \u{00dc}n\u{00ef}c\u{00f6}d\u{00e9} docs.\n",
+        "# Example\n\nÜpdäted Ünïcödé docs.\n",
     )
     .unwrap();
     git(&p, &["add", "."]);
-    git(
-        &p,
-        &[
-            "commit",
-            "-m",
-            "docs: update \u{00dc}n\u{00ef}c\u{00f6}d\u{00e9} documentation",
-        ],
-    );
+    git(&p, &["commit", "-m", "docs: update Ünïcödé documentation"]);
     let unicode_oid = head_oid(&p);
 
     // ---- Annotated tag ----
@@ -269,10 +262,10 @@ fn commits_walk_returns_expected_count() {
     let f = &*FIXTURE;
     let repo = Repository::open(&f.path).unwrap();
     let commits = repo.commits(100).unwrap();
-    // 10 commits total, but assert >= 8 for resilience
-    assert!(
-        commits.len() >= 8,
-        "expected at least 8 commits, got {}",
+    assert_eq!(
+        commits.len(),
+        10,
+        "expected exactly 10 commits, got {}",
         commits.len()
     );
 }
@@ -336,7 +329,7 @@ fn unicode_in_commit_message() {
         .find(|c| c.oid == f.unicode_oid)
         .expect("unicode commit not found");
     assert!(
-        uni.subject.contains("\u{00dc}n\u{00ef}c\u{00f6}d\u{00e9}"),
+        uni.subject.contains("Ünïcödé"),
         "unicode not found in subject: {:?}",
         uni.subject
     );
@@ -386,15 +379,14 @@ fn diff_rename_detected() {
     let f = &*FIXTURE;
     let repo = Repository::open(&f.path).unwrap();
     let diffs = repo.diff_commit(&f.rename_oid).unwrap();
-    let renamed = diffs.iter().find(|d| d.status == FileStatus::Renamed);
+    let renamed = diffs
+        .iter()
+        .find(|d| d.status == FileStatus::Renamed)
+        .expect("expected a Renamed file in diff");
     assert!(
-        renamed.is_some(),
-        "expected a Renamed file in diff: {diffs:?}"
-    );
-    assert!(
-        renamed.unwrap().path.contains("library.rs"),
+        renamed.path.contains("library.rs"),
         "renamed file path should contain 'library.rs': {:?}",
-        renamed.unwrap().path
+        renamed.path
     );
 }
 
@@ -403,15 +395,14 @@ fn diff_delete_detected() {
     let f = &*FIXTURE;
     let repo = Repository::open(&f.path).unwrap();
     let diffs = repo.diff_commit(&f.delete_oid).unwrap();
-    let deleted = diffs.iter().find(|d| d.status == FileStatus::Deleted);
+    let deleted = diffs
+        .iter()
+        .find(|d| d.status == FileStatus::Deleted)
+        .expect("expected a Deleted file in diff");
     assert!(
-        deleted.is_some(),
-        "expected a Deleted file in diff: {diffs:?}"
-    );
-    assert!(
-        deleted.unwrap().path.contains("guide.md"),
+        deleted.path.contains("guide.md"),
         "deleted file should be guide.md: {:?}",
-        deleted.unwrap().path
+        deleted.path
     );
 }
 
@@ -446,6 +437,8 @@ fn diff_hunk_line_origins_are_valid() {
     let f = &*FIXTURE;
     let repo = Repository::open(&f.path).unwrap();
     let diffs = repo.diff_commit(&f.multi_file_oid).unwrap();
+    let mut has_addition = false;
+    let mut has_deletion = false;
     for file_diff in &diffs {
         for hunk in &file_diff.hunks {
             assert!(!hunk.header.is_empty(), "hunk header should not be empty");
@@ -456,11 +449,15 @@ fn diff_hunk_line_origins_are_valid() {
             );
             for line in &hunk.lines {
                 match line.origin {
-                    LineOrigin::Context | LineOrigin::Addition | LineOrigin::Deletion => {}
+                    LineOrigin::Addition => has_addition = true,
+                    LineOrigin::Deletion => has_deletion = true,
+                    LineOrigin::Context => {}
                 }
             }
         }
     }
+    assert!(has_addition, "expected at least one Addition line");
+    assert!(has_deletion, "expected at least one Deletion line");
 }
 
 // ---------------------------------------------------------------------------
@@ -510,14 +507,15 @@ fn smoke_diff_latest_commit() {
     let repo = Repository::open(&root).unwrap();
     let commits = repo.commits(20).unwrap();
     // Find a non-merge commit (1 parent)
-    let non_merge = commits.iter().find(|c| c.parent_oids.len() == 1);
-    if let Some(commit) = non_merge {
-        let diffs = repo.diff_commit(&commit.oid).unwrap();
-        assert!(
-            !diffs.is_empty(),
-            "non-merge commit diff should not be empty"
-        );
-    }
+    let commit = commits
+        .iter()
+        .find(|c| c.parent_oids.len() == 1)
+        .expect("expected at least one non-merge commit in recent history");
+    let diffs = repo.diff_commit(&commit.oid).unwrap();
+    assert!(
+        !diffs.is_empty(),
+        "non-merge commit diff should not be empty"
+    );
 }
 
 #[test]
