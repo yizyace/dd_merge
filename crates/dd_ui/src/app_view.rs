@@ -20,7 +20,13 @@ pub struct AppView {
 
 impl AppView {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let state = Session::load().ok().flatten().unwrap_or_default();
+        let mut state = Session::load().ok().flatten().unwrap_or_default();
+
+        // Filter out repos that no longer exist or aren't valid git repos
+        state
+            .repos
+            .retain(|tab| dd_git::Repository::open(&tab.path).is_ok());
+        state.active_tab = state.active_tab.min(state.repos.len().saturating_sub(1));
 
         let repo_views: Vec<_> = state
             .repos

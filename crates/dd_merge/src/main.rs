@@ -2,6 +2,7 @@ use gpui::*;
 use gpui_component::Root;
 use gpui_component_assets::Assets;
 
+use dd_core::Session;
 use dd_ui::app_view::{OpenRepository, Quit};
 
 fn main() {
@@ -46,15 +47,25 @@ fn main() {
                 },
                 |window, cx| {
                     let app_view = cx.new(|cx| dd_ui::AppView::new(window, cx));
-                    let app_view_weak = app_view.downgrade();
+                    let app_view_for_menu = app_view.downgrade();
+                    let app_view_for_quit = app_view.downgrade();
 
                     // Handle File > Open Repository menu action
                     cx.on_action(move |_action: &OpenRepository, cx: &mut App| {
-                        if let Some(app_view) = app_view_weak.upgrade() {
+                        if let Some(app_view) = app_view_for_menu.upgrade() {
                             app_view.update(cx, |view, cx| {
                                 view.open_repository_dialog(cx);
                             });
                         }
+                    });
+
+                    // Save session state on quit
+                    let _ = cx.on_app_quit(move |cx| {
+                        if let Some(app_view) = app_view_for_quit.upgrade() {
+                            let state = app_view.read(cx).state().clone();
+                            let _ = Session::save(&state);
+                        }
+                        async {}
                     });
 
                     cx.new(|cx| Root::new(app_view, window, cx))
