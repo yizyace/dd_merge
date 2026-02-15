@@ -1,6 +1,6 @@
 use gpui::prelude::*;
 use gpui::{Context, Window};
-use gpui_component::{v_flex, ActiveTheme};
+use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
 use dd_git::CommitInfo;
 
@@ -128,7 +128,7 @@ impl Render for CommitList {
         v_flex()
             .h_full()
             .w_full()
-            .overflow_y_hidden()
+            .overflow_y_scrollbar()
             .children(rows)
     }
 }

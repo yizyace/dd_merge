@@ -1,5 +1,6 @@
 pub mod app_view;
 pub mod commit_list;
+pub mod diff_view;
 pub mod repo_view;
 pub mod sidebar;
 pub mod theme;

@@ -1,6 +1,6 @@
 use gpui::prelude::*;
 use gpui::{Context, Window};
-use gpui_component::{v_flex, ActiveTheme};
+use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
 use dd_git::{BranchInfo, RemoteInfo, StashInfo, TagInfo};
 
@@ -118,7 +118,7 @@ impl Render for Sidebar {
             .bg(cx.theme().sidebar)
             .py_2()
             .gap_2()
-            .overflow_y_hidden()
+            .overflow_y_scrollbar()
             .child(self.render_section("BRANCHES", self.data.branches.len(), branch_items, cx))
             .child(self.render_section("REMOTES", self.data.remotes.len(), remote_items, cx))
             .child(self.render_section("TAGS", self.data.tags.len(), tag_items, cx))
