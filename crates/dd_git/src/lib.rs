@@ -1,13 +1,5 @@
-pub fn name() -> &'static str {
-    "dd_git"
-}
+pub mod repository;
+pub mod types;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_name() {
-        assert_eq!(name(), "dd_git");
-    }
-}
+pub use repository::Repository;
+pub use types::{BranchInfo, RemoteInfo, StashInfo, TagInfo};
