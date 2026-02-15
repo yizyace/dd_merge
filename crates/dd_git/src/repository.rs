@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_is_dirty_staged_change() {
-        let (dir, repo) = init_test_repo();
+        let (dir, _repo) = init_test_repo();
         std::fs::write(dir.path().join("file.txt"), "staged").unwrap();
         git(dir.path(), &["add", "file.txt"]);
         // Re-open to pick up index changes

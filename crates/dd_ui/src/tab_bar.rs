@@ -5,6 +5,7 @@ use gpui_component::{h_flex, ActiveTheme};
 pub struct TabInfo {
     pub name: String,
     pub is_active: bool,
+    pub is_dirty: bool,
 }
 
 #[derive(Clone)]
@@ -33,6 +34,7 @@ impl Render for DragPreview {
 
 pub struct TabBar {
     tabs: Vec<TabInfo>,
+    hovered_close: Option<usize>,
     #[allow(clippy::type_complexity)]
     on_select: Option<Box<dyn Fn(usize, &mut Window, &mut Context<Self>) + 'static>>,
     #[allow(clippy::type_complexity)]
@@ -51,6 +53,7 @@ impl TabBar {
     pub fn new() -> Self {
         Self {
             tabs: Vec::new(),
+            hovered_close: None,
             on_select: None,
             on_close: None,
             on_reorder: None,
@@ -59,6 +62,7 @@ impl TabBar {
 
     pub fn set_tabs(&mut self, tabs: Vec<TabInfo>, cx: &mut Context<Self>) {
         self.tabs = tabs;
+        self.hovered_close = None;
         cx.notify();
     }
 
@@ -120,7 +124,9 @@ impl Render for TabBar {
             .enumerate()
             .map(|(i, tab)| {
                 let is_active = tab.is_active;
+                let is_dirty = tab.is_dirty;
                 let name = tab.name.clone();
+                let show_close = !is_dirty || self.hovered_close == Some(i);
 
                 h_flex()
                     .id(gpui::ElementId::Integer(i as u64))
@@ -170,10 +176,18 @@ impl Render for TabBar {
                             .text_color(cx.theme().muted_foreground)
                             .cursor_pointer()
                             .hover(|el| el.text_color(cx.theme().foreground))
+                            .on_hover(cx.listener(move |view, hovered: &bool, _window, cx| {
+                                if *hovered {
+                                    view.hovered_close = Some(i);
+                                } else if view.hovered_close == Some(i) {
+                                    view.hovered_close = None;
+                                }
+                                cx.notify();
+                            }))
                             .on_click(cx.listener(move |view, _event, window, cx| {
                                 view.close_tab(i, window, cx);
                             }))
-                            .child("×"),
+                            .child(if show_close { "×" } else { "●" }),
                     )
             })
             .collect();
@@ -203,10 +217,12 @@ mod tests {
             TabInfo {
                 name: "repo1".into(),
                 is_active: true,
+                is_dirty: false,
             },
             TabInfo {
                 name: "repo2".into(),
                 is_active: false,
+                is_dirty: false,
             },
         ];
         assert_eq!(tabs.len(), 2);
@@ -230,10 +246,12 @@ mod tests {
                         TabInfo {
                             name: "repo1".into(),
                             is_active: true,
+                            is_dirty: false,
                         },
                         TabInfo {
                             name: "repo2".into(),
                             is_active: false,
+                            is_dirty: false,
                         },
                     ],
                     cx,
@@ -269,10 +287,12 @@ mod tests {
                         TabInfo {
                             name: "repo1".into(),
                             is_active: true,
+                            is_dirty: false,
                         },
                         TabInfo {
                             name: "repo2".into(),
                             is_active: false,
+                            is_dirty: false,
                         },
                     ],
                     cx,
@@ -308,14 +328,17 @@ mod tests {
                         TabInfo {
                             name: "repo1".into(),
                             is_active: true,
+                            is_dirty: false,
                         },
                         TabInfo {
                             name: "repo2".into(),
                             is_active: false,
+                            is_dirty: false,
                         },
                         TabInfo {
                             name: "repo3".into(),
                             is_active: false,
+                            is_dirty: false,
                         },
                     ],
                     cx,

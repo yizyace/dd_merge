@@ -110,9 +110,15 @@ impl AppView {
             .repos
             .iter()
             .enumerate()
-            .map(|(i, tab)| TabInfo {
-                name: tab.name.clone(),
-                is_active: i == self.state.active_tab,
+            .map(|(i, tab)| {
+                let is_dirty = dd_git::Repository::open(&tab.path)
+                    .map(|r| r.is_dirty().unwrap_or(false))
+                    .unwrap_or(false);
+                TabInfo {
+                    name: tab.name.clone(),
+                    is_active: i == self.state.active_tab,
+                    is_dirty,
+                }
             })
             .collect();
 
