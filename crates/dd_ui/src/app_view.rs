@@ -9,7 +9,10 @@ use dd_core::{AppState, Session};
 use crate::repo_view::RepoView;
 use crate::tab_bar::{TabBar, TabInfo};
 
-actions!(dd_merge, [OpenRepository, Quit]);
+actions!(
+    dd_merge,
+    [OpenRepository, Quit, CloseTab, NextTab, PreviousTab]
+);
 
 pub struct AppView {
     state: AppState,
@@ -197,6 +200,31 @@ impl AppView {
     pub fn set_active_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.state.repos.len() {
             self.state.active_tab = index;
+            self.sync_tab_bar(cx);
+            cx.notify();
+        }
+    }
+
+    pub fn close_active_tab(&mut self, cx: &mut Context<Self>) {
+        if !self.state.repos.is_empty() {
+            let index = self.state.active_tab.min(self.state.repos.len() - 1);
+            self.remove_repo(index, cx);
+        }
+    }
+
+    pub fn next_tab(&mut self, cx: &mut Context<Self>) {
+        let len = self.state.repos.len();
+        if len > 1 {
+            self.state.active_tab = (self.state.active_tab + 1) % len;
+            self.sync_tab_bar(cx);
+            cx.notify();
+        }
+    }
+
+    pub fn previous_tab(&mut self, cx: &mut Context<Self>) {
+        let len = self.state.repos.len();
+        if len > 1 {
+            self.state.active_tab = (self.state.active_tab + len - 1) % len;
             self.sync_tab_bar(cx);
             cx.notify();
         }
