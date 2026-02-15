@@ -1,8 +1,20 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
 use gpui::prelude::*;
-use gpui::{Context, Window};
-use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
+use gpui::{ease_in_out, Animation, AnimationExt, Context, Window};
+use gpui_component::{h_flex, scroll::ScrollableElement, v_flex, ActiveTheme};
 
 use dd_git::{BranchInfo, RemoteInfo, StashInfo, TagInfo};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SidebarGroup {
+    Branches,
+    Remotes,
+    Tags,
+    Stashes,
+    Submodules,
+}
 
 const SIDEBAR_WIDTH: f32 = 250.0;
 
@@ -26,13 +38,25 @@ impl SidebarData {
 
 pub struct Sidebar {
     data: SidebarData,
+    collapsed: HashMap<SidebarGroup, bool>,
 }
 
 impl Sidebar {
     pub fn new_empty() -> Self {
         Self {
             data: SidebarData::empty(),
+            collapsed: HashMap::new(),
         }
+    }
+
+    pub fn toggle_group(&mut self, group: SidebarGroup, cx: &mut Context<Self>) {
+        let entry = self.collapsed.entry(group).or_insert(false);
+        *entry = !*entry;
+        cx.notify();
+    }
+
+    pub fn is_collapsed(&self, group: SidebarGroup) -> bool {
+        self.collapsed.get(&group).copied().unwrap_or(false)
     }
 
     pub fn data(&self) -> &SidebarData {
@@ -46,23 +70,57 @@ impl Sidebar {
 
     fn render_section(
         &self,
+        group: SidebarGroup,
         title: &str,
         count: usize,
         items: Vec<impl IntoElement>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let collapsed = self.is_collapsed(group);
+        let arrow = if collapsed { "▶" } else { "▼" };
+
         v_flex()
             .w_full()
             .gap_0p5()
             .child(
-                gpui::div()
+                h_flex()
+                    .id(gpui::ElementId::Name(title.to_string().into()))
                     .px_2()
                     .py_1()
+                    .gap_1()
+                    .cursor_pointer()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
+                    .on_click(cx.listener(move |view, _event, _window, cx| {
+                        view.toggle_group(group, cx);
+                    }))
+                    .child(arrow)
                     .child(format!("{} ({})", title, count)),
             )
-            .children(items)
+            .child({
+                let target_h = count as f32 * 28.0;
+                let anim_id = if collapsed {
+                    format!("collapse-{}", title)
+                } else {
+                    format!("expand-{}", title)
+                };
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .children(items)
+                    .with_animation(
+                        gpui::ElementId::Name(anim_id.into()),
+                        Animation::new(Duration::from_millis(150)).with_easing(ease_in_out),
+                        move |el, delta| {
+                            let h = if collapsed {
+                                (1.0 - delta) * target_h
+                            } else {
+                                delta * target_h
+                            };
+                            el.max_h(gpui::px(h))
+                        },
+                    )
+            })
     }
 
     fn render_item(&self, label: String, is_active: bool, cx: &Context<Self>) -> impl IntoElement {
@@ -121,11 +179,41 @@ impl Render for Sidebar {
             .py_2()
             .gap_2()
             .overflow_y_scrollbar()
-            .child(self.render_section("BRANCHES", self.data.branches.len(), branch_items, cx))
-            .child(self.render_section("REMOTES", self.data.remotes.len(), remote_items, cx))
-            .child(self.render_section("TAGS", self.data.tags.len(), tag_items, cx))
-            .child(self.render_section("STASHES", self.data.stashes.len(), stash_items, cx))
-            .child(self.render_section("SUBMODULES", 0, Vec::<gpui::AnyElement>::new(), cx))
+            .child(self.render_section(
+                SidebarGroup::Branches,
+                "BRANCHES",
+                self.data.branches.len(),
+                branch_items,
+                cx,
+            ))
+            .child(self.render_section(
+                SidebarGroup::Remotes,
+                "REMOTES",
+                self.data.remotes.len(),
+                remote_items,
+                cx,
+            ))
+            .child(self.render_section(
+                SidebarGroup::Tags,
+                "TAGS",
+                self.data.tags.len(),
+                tag_items,
+                cx,
+            ))
+            .child(self.render_section(
+                SidebarGroup::Stashes,
+                "STASHES",
+                self.data.stashes.len(),
+                stash_items,
+                cx,
+            ))
+            .child(self.render_section(
+                SidebarGroup::Submodules,
+                "SUBMODULES",
+                0,
+                Vec::<gpui::AnyElement>::new(),
+                cx,
+            ))
     }
 }
 
@@ -168,6 +256,50 @@ mod tests {
                 assert_eq!(view.data().branches.len(), 1);
                 assert_eq!(view.data().branches[0].name, "main");
                 assert_eq!(view.data().remotes.len(), 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_toggle_group_collapses_and_expands(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::test_helpers::init_test_theme(cx));
+        let window = cx.add_window(|_window, _cx| Sidebar::new_empty());
+
+        // All groups start expanded
+        window
+            .read_with(cx, |view, _cx| {
+                assert!(!view.is_collapsed(SidebarGroup::Branches));
+                assert!(!view.is_collapsed(SidebarGroup::Remotes));
+                assert!(!view.is_collapsed(SidebarGroup::Tags));
+            })
+            .unwrap();
+
+        // Toggle Branches → collapsed
+        window
+            .update(cx, |view, _window, cx| {
+                view.toggle_group(SidebarGroup::Branches, cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert!(view.is_collapsed(SidebarGroup::Branches));
+                // Other groups unaffected
+                assert!(!view.is_collapsed(SidebarGroup::Remotes));
+                assert!(!view.is_collapsed(SidebarGroup::Tags));
+            })
+            .unwrap();
+
+        // Toggle Branches again → re-expanded
+        window
+            .update(cx, |view, _window, cx| {
+                view.toggle_group(SidebarGroup::Branches, cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert!(!view.is_collapsed(SidebarGroup::Branches));
             })
             .unwrap();
     }
