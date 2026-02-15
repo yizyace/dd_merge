@@ -127,6 +127,30 @@ impl Repository {
         Ok(commits)
     }
 
+    pub fn is_dirty(&self) -> Result<bool> {
+        // Check tracked changes (staged + unstaged modifications) first via
+        // the fast built-in check which skips the directory walk.
+        if self.inner.is_dirty()? {
+            return Ok(true);
+        }
+        // Also check for untracked files via the index-worktree iterator
+        // with directory walk enabled.
+        let iter = self
+            .inner
+            .status(gix::progress::Discard)?
+            .into_index_worktree_iter(Vec::<gix::bstr::BString>::new())?;
+        for item in iter {
+            let item = item?;
+            if matches!(
+                item,
+                gix::status::index_worktree::Item::DirectoryContents { .. }
+            ) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn diff_commit(&self, oid: &str) -> Result<Vec<FileDiff>> {
         let workdir = self
             .inner
@@ -267,6 +291,38 @@ mod tests {
         let commits = repo.commits(2).unwrap();
         assert_eq!(commits[0].parent_oids.len(), 1);
         assert_eq!(commits[0].parent_oids[0], commits[1].oid);
+    }
+
+    #[test]
+    fn test_is_dirty_clean_repo() {
+        let (_dir, repo) = init_test_repo();
+        assert!(!repo.is_dirty().unwrap());
+    }
+
+    #[test]
+    fn test_is_dirty_unstaged_modification() {
+        let (dir, repo) = init_test_repo();
+        std::fs::write(dir.path().join("file.txt"), "modified").unwrap();
+        assert!(repo.is_dirty().unwrap());
+    }
+
+    #[test]
+    fn test_is_dirty_staged_change() {
+        let (dir, repo) = init_test_repo();
+        std::fs::write(dir.path().join("file.txt"), "staged").unwrap();
+        git(dir.path(), &["add", "file.txt"]);
+        // Re-open to pick up index changes
+        let repo = Repository::open(dir.path()).unwrap();
+        assert!(repo.is_dirty().unwrap());
+    }
+
+    #[test]
+    fn test_is_dirty_untracked_file() {
+        let (dir, _repo) = init_test_repo();
+        std::fs::write(dir.path().join("new_file.txt"), "untracked").unwrap();
+        // Re-open so the repo picks up the new working directory state
+        let repo = Repository::open(dir.path()).unwrap();
+        assert!(repo.is_dirty().unwrap());
     }
 
     #[test]
