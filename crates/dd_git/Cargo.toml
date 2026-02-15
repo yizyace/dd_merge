@@ -1,0 +1,13 @@
+[package]
+name = "dd_git"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gix = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
