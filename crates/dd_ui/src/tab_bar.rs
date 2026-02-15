@@ -5,14 +5,42 @@ use gpui_component::{h_flex, ActiveTheme};
 pub struct TabInfo {
     pub name: String,
     pub is_active: bool,
+    pub is_dirty: bool,
+}
+
+#[derive(Clone)]
+struct DraggedTab {
+    index: usize,
+    name: String,
+}
+
+struct DragPreview {
+    name: String,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .px_3()
+            .py_1()
+            .bg(cx.theme().muted)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded_md()
+            .text_sm()
+            .child(self.name.clone())
+    }
 }
 
 pub struct TabBar {
     tabs: Vec<TabInfo>,
+    hovered_close: Option<usize>,
     #[allow(clippy::type_complexity)]
     on_select: Option<Box<dyn Fn(usize, &mut Window, &mut Context<Self>) + 'static>>,
     #[allow(clippy::type_complexity)]
     on_close: Option<Box<dyn Fn(usize, &mut Window, &mut Context<Self>) + 'static>>,
+    #[allow(clippy::type_complexity)]
+    on_reorder: Option<Box<dyn Fn(usize, usize, &mut Window, &mut Context<Self>) + 'static>>,
 }
 
 impl Default for TabBar {
@@ -25,13 +53,16 @@ impl TabBar {
     pub fn new() -> Self {
         Self {
             tabs: Vec::new(),
+            hovered_close: None,
             on_select: None,
             on_close: None,
+            on_reorder: None,
         }
     }
 
     pub fn set_tabs(&mut self, tabs: Vec<TabInfo>, cx: &mut Context<Self>) {
         self.tabs = tabs;
+        self.hovered_close = None;
         cx.notify();
     }
 
@@ -49,6 +80,13 @@ impl TabBar {
         self.on_close = Some(Box::new(callback));
     }
 
+    pub fn on_reorder(
+        &mut self,
+        callback: impl Fn(usize, usize, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        self.on_reorder = Some(Box::new(callback));
+    }
+
     pub fn select_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ref on_select) = self.on_select {
             on_select(index, window, cx);
@@ -58,6 +96,18 @@ impl TabBar {
     pub fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ref on_close) = self.on_close {
             on_close(index, window, cx);
+        }
+    }
+
+    pub fn reorder_tab(
+        &mut self,
+        from: usize,
+        to: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ref on_reorder) = self.on_reorder {
+            on_reorder(from, to, window, cx);
         }
     }
 }
@@ -74,7 +124,9 @@ impl Render for TabBar {
             .enumerate()
             .map(|(i, tab)| {
                 let is_active = tab.is_active;
+                let is_dirty = tab.is_dirty;
                 let name = tab.name.clone();
+                let show_close = !is_dirty || self.hovered_close == Some(i);
 
                 h_flex()
                     .id(gpui::ElementId::Integer(i as u64))
@@ -90,6 +142,23 @@ impl Render for TabBar {
                     .on_click(cx.listener(move |view, _event, window, cx| {
                         view.select_tab(i, window, cx);
                     }))
+                    .on_drag(
+                        DraggedTab {
+                            index: i,
+                            name: name.clone(),
+                        },
+                        |dragged, _, _, cx| {
+                            cx.new(|_| DragPreview {
+                                name: dragged.name.clone(),
+                            })
+                        },
+                    )
+                    .on_drop(cx.listener(move |view, dragged: &DraggedTab, window, cx| {
+                        view.reorder_tab(dragged.index, i, window, cx);
+                    }))
+                    .drag_over::<DraggedTab>(|style, _, _, _| {
+                        style.bg(gpui::hsla(0.6, 0.3, 0.5, 0.15))
+                    })
                     .child(
                         gpui::div()
                             .text_sm()
@@ -107,10 +176,18 @@ impl Render for TabBar {
                             .text_color(cx.theme().muted_foreground)
                             .cursor_pointer()
                             .hover(|el| el.text_color(cx.theme().foreground))
+                            .on_hover(cx.listener(move |view, hovered: &bool, _window, cx| {
+                                if *hovered {
+                                    view.hovered_close = Some(i);
+                                } else if view.hovered_close == Some(i) {
+                                    view.hovered_close = None;
+                                }
+                                cx.notify();
+                            }))
                             .on_click(cx.listener(move |view, _event, window, cx| {
                                 view.close_tab(i, window, cx);
                             }))
-                            .child("×"),
+                            .child(if show_close { "×" } else { "●" }),
                     )
             })
             .collect();
@@ -140,10 +217,12 @@ mod tests {
             TabInfo {
                 name: "repo1".into(),
                 is_active: true,
+                is_dirty: false,
             },
             TabInfo {
                 name: "repo2".into(),
                 is_active: false,
+                is_dirty: false,
             },
         ];
         assert_eq!(tabs.len(), 2);
@@ -167,10 +246,12 @@ mod tests {
                         TabInfo {
                             name: "repo1".into(),
                             is_active: true,
+                            is_dirty: false,
                         },
                         TabInfo {
                             name: "repo2".into(),
                             is_active: false,
+                            is_dirty: false,
                         },
                     ],
                     cx,
@@ -206,10 +287,12 @@ mod tests {
                         TabInfo {
                             name: "repo1".into(),
                             is_active: true,
+                            is_dirty: false,
                         },
                         TabInfo {
                             name: "repo2".into(),
                             is_active: false,
+                            is_dirty: false,
                         },
                     ],
                     cx,
@@ -227,5 +310,51 @@ mod tests {
             .unwrap();
 
         assert_eq!(closed.get(), Some(0));
+    }
+
+    #[gpui::test]
+    fn test_reorder_tab_fires_callback(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+
+        let reordered = Rc::new(Cell::new(None::<(usize, usize)>));
+        let reordered_clone = reordered.clone();
+
+        let window = cx.add_window(|_window, _cx| TabBar::new());
+
+        window
+            .update(cx, |bar, _window, cx| {
+                bar.set_tabs(
+                    vec![
+                        TabInfo {
+                            name: "repo1".into(),
+                            is_active: true,
+                            is_dirty: false,
+                        },
+                        TabInfo {
+                            name: "repo2".into(),
+                            is_active: false,
+                            is_dirty: false,
+                        },
+                        TabInfo {
+                            name: "repo3".into(),
+                            is_active: false,
+                            is_dirty: false,
+                        },
+                    ],
+                    cx,
+                );
+                bar.on_reorder(move |from, to, _window, _cx| {
+                    reordered_clone.set(Some((from, to)));
+                });
+            })
+            .unwrap();
+
+        window
+            .update(cx, |bar, window, cx| {
+                bar.reorder_tab(0, 2, window, cx);
+            })
+            .unwrap();
+
+        assert_eq!(reordered.get(), Some((0, 2)));
     }
 }
