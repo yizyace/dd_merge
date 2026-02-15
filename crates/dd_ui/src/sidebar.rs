@@ -4,7 +4,7 @@ use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
 use dd_git::{BranchInfo, RemoteInfo, StashInfo, TagInfo};
 
-const SIDEBAR_WIDTH: f32 = 200.0;
+const SIDEBAR_WIDTH: f32 = 250.0;
 
 pub struct SidebarData {
     pub branches: Vec<BranchInfo>,
