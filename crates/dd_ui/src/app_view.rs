@@ -89,6 +89,13 @@ impl AppView {
                 });
             });
 
+            let this_reorder = this.clone();
+            bar.on_reorder(move |from, to, _window, cx| {
+                let _ = this_reorder.update(cx, |view, cx| {
+                    view.reorder_repo(from, to, cx);
+                });
+            });
+
             bar.on_close(move |index, _window, cx| {
                 let _ = this.update(cx, |view, cx| {
                     view.remove_repo(index, cx);
@@ -155,6 +162,23 @@ impl AppView {
                 cx.notify();
             }
         }
+    }
+
+    pub fn reorder_repo(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        let len = self.repo_views.len();
+        if from == to || from >= len || to >= len {
+            return;
+        }
+        let view = self.repo_views.remove(from);
+        self.repo_views.insert(to, view);
+        self.state.reorder_repos(from, to);
+        cx.notify();
+        let entity = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = entity.update(cx, |view, cx| {
+                view.sync_tab_bar(cx);
+            });
+        });
     }
 
     pub fn remove_repo(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -472,6 +496,84 @@ mod tests {
             .read_with(cx, |view, _cx| {
                 assert_eq!(view.state().repos.len(), 2);
                 assert_eq!(view.repo_view_count(), 2);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_reorder_repo(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let dir3 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        let name1 = dir1
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+                view.try_add_repo(dir3.path().to_path_buf(), cx);
+                view.set_active_tab(0, cx);
+                view.reorder_repo(0, 2, cx);
+            })
+            .unwrap();
+
+        cx.run_until_parked();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().repos.len(), 3);
+                assert_eq!(view.repo_view_count(), 3);
+                // repo1 moved from 0 to 2
+                assert_eq!(view.state().repos[2].name, name1);
+                // active_tab follows repo1
+                assert_eq!(view.state().active_tab, 2);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_tab_bar_reorder_does_not_crash(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let dir3 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+                view.try_add_repo(dir3.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        let tab_bar = window
+            .read_with(cx, |view, _cx| view.tab_bar().clone())
+            .unwrap();
+
+        let any_handle = window.into();
+        cx.update_window(any_handle, |_root, window, app| {
+            tab_bar.update(app, |bar, cx| {
+                bar.reorder_tab(0, 2, window, cx);
+            });
+        })
+        .unwrap();
+
+        cx.run_until_parked();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().repos.len(), 3);
+                assert_eq!(view.repo_view_count(), 3);
             })
             .unwrap();
     }
