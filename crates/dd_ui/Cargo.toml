@@ -11,6 +11,7 @@ dd_core = { path = "../dd_core" }
 dd_git = { path = "../dd_git" }
 anyhow = { workspace = true }
 chrono = { workspace = true }
+syntect = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
