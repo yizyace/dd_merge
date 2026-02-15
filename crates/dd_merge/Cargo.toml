@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 dd_ui = { path = "../dd_ui" }
 dd_core = { path = "../dd_core" }
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+gpui-component-assets = { workspace = true }

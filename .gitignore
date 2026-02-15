@@ -10,6 +10,13 @@ Cargo.lock
 # OS
 .DS_Store
 
+# Generated build artifacts
+assets/icon.icns
+assets/icon.iconset/
+
+# Temp
+/tmp/
+
 # AI
 .claude/
 .copilot/

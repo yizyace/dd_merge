@@ -42,11 +42,21 @@ pub struct FileDiff {
 }
 
 pub(crate) fn diff_commit(workdir: &Path, oid: &str) -> Result<Vec<FileDiff>> {
+    anyhow::ensure!(
+        oid.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid commit OID: {oid}"
+    );
+
     let output = Command::new("git")
         .args(["diff-tree", "-p", "--no-commit-id", "-M", oid])
         .current_dir(workdir)
         .output()
         .context("failed to run git diff-tree")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git diff-tree failed: {}", stderr.trim());
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -57,6 +67,11 @@ pub(crate) fn diff_commit(workdir: &Path, oid: &str) -> Result<Vec<FileDiff>> {
             .current_dir(workdir)
             .output()
             .context("failed to run git diff-tree --root")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git diff-tree --root failed: {}", stderr.trim());
+        }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         return parse_unified_diff(&stdout);
@@ -278,5 +293,74 @@ index 0000000..abc1234
             .lines
             .iter()
             .all(|l| l.origin == LineOrigin::Addition));
+    }
+
+    #[test]
+    fn test_parse_deleted_file_diff() {
+        let diff = "\
+diff --git a/old.txt b/old.txt
+deleted file mode 100644
+index abc1234..0000000
+--- a/old.txt
++++ /dev/null
+@@ -1,2 +0,0 @@
+-hello
+-world
+";
+        let files = parse_unified_diff(diff).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].status, FileStatus::Deleted);
+        assert_eq!(files[0].path, "old.txt");
+        assert!(files[0].hunks[0]
+            .lines
+            .iter()
+            .all(|l| l.origin == LineOrigin::Deletion));
+    }
+
+    #[test]
+    fn test_parse_renamed_file_diff() {
+        let diff = "\
+diff --git a/old_name.txt b/new_name.txt
+similarity index 100%
+rename from old_name.txt
+rename to new_name.txt
+";
+        let files = parse_unified_diff(diff).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].status, FileStatus::Renamed);
+        assert_eq!(files[0].path, "new_name.txt");
+        assert!(files[0].hunks.is_empty());
+    }
+
+    #[test]
+    fn test_parse_empty_diff() {
+        let files = parse_unified_diff("").unwrap();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multi_file_diff() {
+        let diff = "\
+diff --git a/a.txt b/a.txt
+index abc..def 100644
+--- a/a.txt
++++ b/a.txt
+@@ -1 +1 @@
+-old a
++new a
+diff --git a/b.txt b/b.txt
+new file mode 100644
+index 0000000..abc1234
+--- /dev/null
++++ b/b.txt
+@@ -0,0 +1 @@
++new b
+";
+        let files = parse_unified_diff(diff).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "a.txt");
+        assert_eq!(files[0].status, FileStatus::Modified);
+        assert_eq!(files[1].path, "b.txt");
+        assert_eq!(files[1].status, FileStatus::Added);
     }
 }

@@ -142,35 +142,29 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
+    fn git(path: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("failed to execute git");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     fn init_test_repo() -> (TempDir, Repository) {
         let dir = TempDir::new().unwrap();
         let path = dir.path();
-        Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()
-            .unwrap();
+        git(path, &["init", "-b", "main"]);
+        git(path, &["config", "user.email", "test@test.com"]);
+        git(path, &["config", "user.name", "Test"]);
         std::fs::write(path.join("file.txt"), "hello").unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "initial"])
-            .current_dir(path)
-            .output()
-            .unwrap();
+        git(path, &["add", "."]);
+        git(path, &["commit", "-m", "initial"]);
         let repo = Repository::open(path).unwrap();
         (dir, repo)
     }
@@ -227,33 +221,13 @@ mod tests {
     fn init_test_repo_with_commits(count: usize) -> (TempDir, Repository) {
         let dir = TempDir::new().unwrap();
         let path = dir.path();
-        Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test User"])
-            .current_dir(path)
-            .output()
-            .unwrap();
+        git(path, &["init", "-b", "main"]);
+        git(path, &["config", "user.email", "test@test.com"]);
+        git(path, &["config", "user.name", "Test User"]);
         for i in 0..count {
             std::fs::write(path.join("file.txt"), format!("content {i}")).unwrap();
-            Command::new("git")
-                .args(["add", "."])
-                .current_dir(path)
-                .output()
-                .unwrap();
-            Command::new("git")
-                .args(["commit", "-m", &format!("commit {i}")])
-                .current_dir(path)
-                .output()
-                .unwrap();
+            git(path, &["add", "."]);
+            git(path, &["commit", "-m", &format!("commit {i}")]);
         }
         let repo = Repository::open(path).unwrap();
         (dir, repo)

@@ -27,7 +27,9 @@ impl AppState {
     pub fn remove_repo(&mut self, index: usize) {
         if index < self.repos.len() {
             self.repos.remove(index);
-            if self.active_tab >= self.repos.len() && !self.repos.is_empty() {
+            if self.repos.is_empty() {
+                self.active_tab = 0;
+            } else if self.active_tab >= self.repos.len() {
                 self.active_tab = self.repos.len() - 1;
             }
         }
@@ -71,5 +73,26 @@ mod tests {
         state.remove_repo(0);
         assert_eq!(state.repos.len(), 1);
         assert_eq!(state.repos[0].name, "repo2");
+    }
+
+    #[test]
+    fn test_remove_repo_out_of_bounds() {
+        let mut state = AppState::default();
+        state.add_repo(PathBuf::from("/tmp/repo1"));
+        state.add_repo(PathBuf::from("/tmp/repo2"));
+        state.remove_repo(99);
+        assert_eq!(state.repos.len(), 2);
+        assert_eq!(state.active_tab, 1);
+    }
+
+    #[test]
+    fn test_remove_all_repos() {
+        let mut state = AppState::default();
+        state.add_repo(PathBuf::from("/tmp/repo1"));
+        state.add_repo(PathBuf::from("/tmp/repo2"));
+        state.remove_repo(1);
+        state.remove_repo(0);
+        assert!(state.repos.is_empty());
+        assert_eq!(state.active_tab, 0);
     }
 }

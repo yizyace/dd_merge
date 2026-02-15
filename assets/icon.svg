@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <!-- Two branches merging into a single downward arrow -->
+  <!-- Drawn as one unified outline path -->
+  <path fill="#1E1E1E" d="
+    M 260 100
+    L 260 430
+    C 260 530 380 590 472 590
+    L 472 770
+    L 390 770
+    L 512 920
+    L 634 770
+    L 552 770
+    L 552 590
+    C 644 590 764 530 764 430
+    L 764 100
+    L 684 100
+    L 684 430
+    C 684 510 620 560 552 560
+    L 472 560
+    C 404 560 340 510 340 430
+    L 340 100
+    Z
+  "/>
+</svg>
