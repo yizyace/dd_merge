@@ -21,11 +21,7 @@ pub struct RepoView {
 }
 
 impl RepoView {
-    pub fn new(path: PathBuf, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_without_window(path, cx)
-    }
-
-    pub fn new_without_window(path: PathBuf, cx: &mut Context<Self>) -> Self {
+    pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
         let repo_name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -154,7 +150,7 @@ mod tests {
         let dir = init_test_repo();
         let path = dir.path().to_path_buf();
 
-        let window = cx.add_window(|window, cx| RepoView::new(path, window, cx));
+        let window = cx.add_window(|_window, cx| RepoView::new(path, cx));
 
         window
             .read_with(cx, |view, cx| {
@@ -174,7 +170,7 @@ mod tests {
         let dir = init_test_repo_with_changes();
         let path = dir.path().to_path_buf();
 
-        let window = cx.add_window(|window, cx| RepoView::new(path, window, cx));
+        let window = cx.add_window(|_window, cx| RepoView::new(path, cx));
 
         window
             .read_with(cx, |view, cx| {
@@ -194,7 +190,7 @@ mod tests {
         let dir = init_test_repo_with_changes();
         let path = dir.path().to_path_buf();
 
-        let window = cx.add_window(|window, cx| RepoView::new(path, window, cx));
+        let window = cx.add_window(|_window, cx| RepoView::new(path, cx));
 
         // Select the first commit (most recent = "second commit")
         window
@@ -230,7 +226,7 @@ mod tests {
             .to_string();
         let path = dir.path().to_path_buf();
 
-        let window = cx.add_window(|window, cx| RepoView::new(path, window, cx));
+        let window = cx.add_window(|_window, cx| RepoView::new(path, cx));
 
         window
             .read_with(cx, |view, _cx| {

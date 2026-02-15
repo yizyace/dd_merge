@@ -73,7 +73,7 @@ impl CommitList {
         let short_oid = commit.short_oid.clone();
 
         gpui::div()
-            .id(gpui::ElementId::Name(format!("commit-{index}").into()))
+            .id(gpui::ElementId::Integer(index as u64))
             .w_full()
             .px_3()
             .py_1()

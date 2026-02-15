@@ -7,17 +7,19 @@ use gpui_component::{button::Button, v_flex, ActiveTheme};
 use dd_core::{AppState, Session};
 
 use crate::repo_view::RepoView;
+use crate::tab_bar::{TabBar, TabInfo};
 
-actions!(dd_merge, [OpenRepository]);
+actions!(dd_merge, [OpenRepository, Quit]);
 
 pub struct AppView {
     state: AppState,
     repo_views: Vec<Entity<RepoView>>,
+    tab_bar: Entity<TabBar>,
     error_message: Option<String>,
 }
 
 impl AppView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let state = Session::load().ok().flatten().unwrap_or_default();
 
         let repo_views: Vec<_> = state
@@ -25,22 +27,85 @@ impl AppView {
             .iter()
             .map(|tab| {
                 let path = tab.path.clone();
-                cx.new(|cx| RepoView::new(path, window, cx))
+                cx.new(|cx| RepoView::new(path, cx))
             })
             .collect();
 
-        Self {
+        let tab_bar = cx.new(|_cx| TabBar::new());
+
+        let mut view = Self {
             state,
             repo_views,
+            tab_bar,
             error_message: None,
-        }
+        };
+        view.setup_tab_bar(cx);
+        view.sync_tab_bar(cx);
+        view
     }
 
     pub fn state(&self) -> &AppState {
         &self.state
     }
 
-    pub fn open_repository(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn error_message(&self) -> Option<&str> {
+        self.error_message.as_deref()
+    }
+
+    pub fn repo_view_count(&self) -> usize {
+        self.repo_views.len()
+    }
+
+    pub fn tab_bar(&self) -> &Entity<TabBar> {
+        &self.tab_bar
+    }
+
+    fn setup_tab_bar(&mut self, cx: &mut Context<Self>) {
+        let this = cx.entity().downgrade();
+
+        self.tab_bar.update(cx, |bar: &mut TabBar, _cx| {
+            let this_select = this.clone();
+            bar.on_select(move |index, _window, cx| {
+                let _ = this_select.update(cx, |view, cx| {
+                    view.state.active_tab = index;
+                    cx.notify();
+                });
+                // Defer sync_tab_bar to avoid re-entrant borrow on TabBar,
+                // which is still mutably borrowed by the on_click listener.
+                let this_deferred = this_select.clone();
+                cx.defer(move |cx| {
+                    let _ = this_deferred.update(cx, |view, cx| {
+                        view.sync_tab_bar(cx);
+                    });
+                });
+            });
+
+            bar.on_close(move |index, _window, cx| {
+                let _ = this.update(cx, |view, cx| {
+                    view.remove_repo(index, cx);
+                });
+            });
+        });
+    }
+
+    fn sync_tab_bar(&mut self, cx: &mut Context<Self>) {
+        let tabs: Vec<TabInfo> = self
+            .state
+            .repos
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| TabInfo {
+                name: tab.name.clone(),
+                is_active: i == self.state.active_tab,
+            })
+            .collect();
+
+        self.tab_bar.update(cx, |bar: &mut TabBar, cx| {
+            bar.set_tabs(tabs, cx);
+        });
+    }
+
+    pub fn open_repository_dialog(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -62,20 +127,40 @@ impl AppView {
         .detach();
     }
 
-    fn try_add_repo(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub fn try_add_repo(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.state.repos.iter().any(|r| r.path == path) {
+            return;
+        }
+
         match dd_git::Repository::open(&path) {
             Ok(_) => {
                 self.error_message = None;
                 self.state.add_repo(path.clone());
-                let repo_view = cx.new(|cx| RepoView::new_without_window(path, cx));
+                let repo_view = cx.new(|cx| RepoView::new(path, cx));
                 self.repo_views.push(repo_view);
+                self.sync_tab_bar(cx);
                 cx.notify();
             }
             Err(_) => {
-                self.error_message =
-                    Some(format!("{} is not a git repository", path.display()));
+                self.error_message = Some(format!("{} is not a git repository", path.display()));
                 cx.notify();
             }
+        }
+    }
+
+    pub fn remove_repo(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.repo_views.len() {
+            self.repo_views.remove(index);
+            self.state.remove_repo(index);
+            cx.notify();
+            // Defer sync_tab_bar to avoid re-entrant borrow when called
+            // from within a TabBar callback.
+            let entity = cx.entity().downgrade();
+            cx.defer(move |cx| {
+                let _ = entity.update(cx, |view, cx| {
+                    view.sync_tab_bar(cx);
+                });
+            });
         }
     }
 
@@ -96,11 +181,19 @@ impl AppView {
             .child(
                 Button::new("open-repo")
                     .label("Open Repository")
-                    .on_click(cx.listener(|view, _event, window, cx| {
-                        view.open_repository(window, cx);
+                    .on_click(cx.listener(|view, _event, _window, cx| {
+                        view.open_repository_dialog(cx);
                     })),
             )
             .children(error.map(|msg| gpui::div().text_color(gpui::red()).child(msg)))
+    }
+
+    pub fn set_active_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.state.repos.len() {
+            self.state.active_tab = index;
+            self.sync_tab_bar(cx);
+            cx.notify();
+        }
     }
 }
 
@@ -124,6 +217,307 @@ impl Render for AppView {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            .child(self.tab_bar.clone())
             .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{init_test_repo, init_test_theme};
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn test_fresh_start_has_no_repos(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert!(view.state().repos.is_empty());
+                assert_eq!(view.repo_view_count(), 0);
+                assert!(view.error_message().is_none());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_add_valid_repo(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().repos.len(), 1);
+                assert_eq!(view.repo_view_count(), 1);
+                assert!(view.error_message().is_none());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_add_invalid_path_shows_error(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir = tempfile::TempDir::new().unwrap(); // not a git repo
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert!(view.error_message().is_some());
+                assert!(view.state().repos.is_empty());
+                assert_eq!(view.repo_view_count(), 0);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_add_multiple_repos(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().repos.len(), 2);
+                assert_eq!(view.repo_view_count(), 2);
+                assert_eq!(view.state().active_tab, 1); // last added is active
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_remove_repo(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+                view.remove_repo(0, cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().repos.len(), 1);
+                assert_eq!(view.repo_view_count(), 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_tab_switching(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        // After adding 2 repos, active tab should be 1 (last added)
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().active_tab, 1);
+            })
+            .unwrap();
+
+        // Switch to tab 0
+        window
+            .update(cx, |view, _window, cx| {
+                view.set_active_tab(0, cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().active_tab, 0);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_add_duplicate_repo_is_ignored(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir.path().to_path_buf(), cx);
+                view.try_add_repo(dir.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().repos.len(), 1);
+                assert_eq!(view.repo_view_count(), 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_set_active_tab_out_of_bounds_ignored(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        // active_tab is 1 after adding 2 repos
+        window
+            .update(cx, |view, _window, cx| {
+                view.set_active_tab(99, cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().active_tab, 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_remove_repo_out_of_bounds_ignored(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.remove_repo(99, cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().repos.len(), 2);
+                assert_eq!(view.repo_view_count(), 2);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_tab_bar_select_does_not_crash(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        // Grab the tab_bar entity without holding an AppView borrow,
+        // so we can simulate a real tab click (which only borrows TabBar).
+        let tab_bar = window
+            .read_with(cx, |view, _cx| view.tab_bar().clone())
+            .unwrap();
+
+        // Active tab is 1 (last added). Click tab 0 through the TabBar callback,
+        // which previously caused a re-entrant borrow panic on TabBar.
+        // Use update_window to get Window + App without borrowing AppView.
+        let any_handle = window.into();
+        cx.update_window(any_handle, |_root, window, app| {
+            tab_bar.update(app, |bar, cx| {
+                bar.select_tab(0, window, cx);
+            });
+        })
+        .unwrap();
+
+        // Flush deferred effects (sync_tab_bar runs via cx.defer)
+        cx.run_until_parked();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().active_tab, 0);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_tab_bar_close_does_not_crash(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+        let dir1 = init_test_repo();
+        let dir2 = init_test_repo();
+        let window = cx.add_window(|window, cx| AppView::new(window, cx));
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.try_add_repo(dir1.path().to_path_buf(), cx);
+                view.try_add_repo(dir2.path().to_path_buf(), cx);
+            })
+            .unwrap();
+
+        let tab_bar = window
+            .read_with(cx, |view, _cx| view.tab_bar().clone())
+            .unwrap();
+
+        // Close tab 0 through the TabBar callback,
+        // which previously caused a re-entrant borrow panic on TabBar.
+        let any_handle = window.into();
+        cx.update_window(any_handle, |_root, window, app| {
+            tab_bar.update(app, |bar, cx| {
+                bar.close_tab(0, window, cx);
+            });
+        })
+        .unwrap();
+
+        cx.run_until_parked();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert_eq!(view.state().repos.len(), 1);
+                assert_eq!(view.repo_view_count(), 1);
+            })
+            .unwrap();
     }
 }
