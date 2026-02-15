@@ -16,8 +16,6 @@ pub enum SidebarGroup {
     Submodules,
 }
 
-const SIDEBAR_WIDTH: f32 = 250.0;
-
 pub struct SidebarData {
     pub branches: Vec<BranchInfo>,
     pub remotes: Vec<RemoteInfo>,
@@ -170,11 +168,7 @@ impl Render for Sidebar {
             .collect();
 
         v_flex()
-            .h_full()
-            .w(gpui::px(SIDEBAR_WIDTH))
-            .min_w(gpui::px(SIDEBAR_WIDTH))
-            .border_r_1()
-            .border_color(cx.theme().border)
+            .size_full()
             .bg(cx.theme().sidebar)
             .py_2()
             .gap_2()

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use gpui::prelude::*;
-use gpui::{Context, Entity, Window};
-use gpui_component::{h_flex, v_flex, ActiveTheme};
+use gpui::{px, Context, Entity, Window};
+use gpui_component::resizable::{h_resizable, resizable_panel};
 
 use dd_git::Repository;
 
@@ -11,7 +11,14 @@ use crate::diff_view::DiffView;
 use crate::sidebar::{Sidebar, SidebarData};
 
 const COMMIT_LIMIT: usize = 100;
-const COMMIT_LIST_WIDTH: f32 = 400.0;
+
+const SIDEBAR_INITIAL_SIZE: f32 = 250.0;
+const SIDEBAR_MIN_SIZE: f32 = 40.0;
+const SIDEBAR_MAX_SIZE: f32 = 500.0;
+
+const COMMIT_LIST_INITIAL_SIZE: f32 = 400.0;
+const COMMIT_LIST_MIN_SIZE: f32 = 40.0;
+const COMMIT_LIST_MAX_SIZE: f32 = 800.0;
 
 pub struct RepoView {
     path: PathBuf,
@@ -117,26 +124,23 @@ impl RepoView {
 }
 
 impl Render for RepoView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .size_full()
-            .child(self.sidebar.clone())
-            .child(
-                v_flex()
-                    .h_full()
-                    .w(gpui::px(COMMIT_LIST_WIDTH))
-                    .min_w(gpui::px(COMMIT_LIST_WIDTH))
-                    .border_r_1()
-                    .border_color(cx.theme().border)
-                    .child(self.commit_list.clone()),
-            )
-            .child(
-                v_flex()
-                    .h_full()
-                    .flex_1()
-                    .flex_grow()
-                    .child(self.diff_view.clone()),
-            )
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        gpui::div().size_full().child(
+            h_resizable("repo-panels")
+                .child(
+                    resizable_panel()
+                        .size(px(SIDEBAR_INITIAL_SIZE))
+                        .size_range(px(SIDEBAR_MIN_SIZE)..px(SIDEBAR_MAX_SIZE))
+                        .child(self.sidebar.clone()),
+                )
+                .child(
+                    resizable_panel()
+                        .size(px(COMMIT_LIST_INITIAL_SIZE))
+                        .size_range(px(COMMIT_LIST_MIN_SIZE)..px(COMMIT_LIST_MAX_SIZE))
+                        .child(self.commit_list.clone()),
+                )
+                .child(resizable_panel().child(self.diff_view.clone())),
+        )
     }
 }
 
