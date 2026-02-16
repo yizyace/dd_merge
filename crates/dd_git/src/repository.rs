@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use gix::bstr::ByteSlice;
@@ -157,6 +158,23 @@ impl Repository {
             .work_dir()
             .context("repository has no working directory")?;
         crate::diff::diff_commit(workdir, oid)
+    }
+
+    pub fn checkout_branch(&self, branch_name: &str) -> Result<()> {
+        let workdir = self
+            .inner
+            .work_dir()
+            .context("repository has no working directory")?;
+        let output = Command::new("git")
+            .args(["checkout", branch_name])
+            .current_dir(workdir)
+            .output()
+            .context("failed to run git checkout")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git checkout failed: {}", stderr.trim());
+        }
+        Ok(())
     }
 }
 
@@ -353,5 +371,43 @@ mod tests {
         let diffs = repo.diff_commit(&commits[0].oid).unwrap();
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].path, "file.txt");
+    }
+
+    #[test]
+    fn test_checkout_existing_branch() {
+        let (dir, repo) = init_test_repo();
+        git(dir.path(), &["branch", "feature"]);
+        repo.checkout_branch("feature").unwrap();
+        let reopened = Repository::open(dir.path()).unwrap();
+        assert_eq!(reopened.head_branch().unwrap(), "feature");
+    }
+
+    #[test]
+    fn test_checkout_nonexistent_branch_fails() {
+        let (_dir, repo) = init_test_repo();
+        let result = repo.checkout_branch("nonexistent");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("git checkout failed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_checkout_with_conflicting_changes_fails() {
+        let (dir, _repo) = init_test_repo();
+        let path = dir.path();
+        // Create a branch with different file content
+        git(path, &["checkout", "-b", "other"]);
+        std::fs::write(path.join("file.txt"), "other content").unwrap();
+        git(path, &["add", "."]);
+        git(path, &["commit", "-m", "other change"]);
+        git(path, &["checkout", "main"]);
+        // Make conflicting uncommitted changes
+        std::fs::write(path.join("file.txt"), "conflicting content").unwrap();
+        let repo = Repository::open(path).unwrap();
+        let result = repo.checkout_branch("other");
+        assert!(result.is_err());
     }
 }
