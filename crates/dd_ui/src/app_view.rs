@@ -282,7 +282,14 @@ impl Render for AppView {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.tab_bar.clone())
-            .child(content)
+            .child(
+                gpui::div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(content),
+            )
     }
 }
 
