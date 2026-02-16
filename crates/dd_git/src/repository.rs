@@ -134,6 +134,60 @@ impl Repository {
         Ok(commits)
     }
 
+    pub fn commits_after(&self, after_oid: &str, limit: usize) -> Result<Vec<CommitInfo>> {
+        let head_id = self.inner.head_id()?;
+        let walk = self
+            .inner
+            .rev_walk([head_id])
+            .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                Default::default(),
+            ))
+            .all()?;
+
+        let mut found = false;
+        let mut commits = Vec::new();
+        for info in walk {
+            let info = info?;
+            let oid = info.id.to_hex().to_string();
+
+            if !found {
+                if oid == after_oid {
+                    found = true;
+                }
+                continue;
+            }
+
+            if commits.len() >= limit {
+                break;
+            }
+
+            let commit = info.object()?;
+            let author = commit.author()?;
+            let message = commit.message()?;
+            let parent_oids: Vec<String> = info
+                .parent_ids
+                .iter()
+                .map(|id| id.to_hex().to_string())
+                .collect();
+            let short_oid = info.id.to_hex_with_len(7).to_string();
+
+            commits.push(CommitInfo {
+                oid,
+                short_oid,
+                author_name: author.name.to_string(),
+                author_email: author.email.to_string(),
+                date: author.time.seconds,
+                subject: message.title.to_str_lossy().trim().to_string(),
+                body: message
+                    .body
+                    .map(|b| b.to_str_lossy().trim().to_string())
+                    .unwrap_or_default(),
+                parent_oids,
+            });
+        }
+        Ok(commits)
+    }
+
     pub fn is_dirty(&self) -> Result<bool> {
         // Check tracked changes (staged + unstaged modifications) first via
         // the fast built-in check which skips the directory walk.
@@ -345,6 +399,32 @@ mod tests {
         let commits = repo.commits(2).unwrap();
         assert_eq!(commits[0].parent_oids.len(), 1);
         assert_eq!(commits[0].parent_oids[0], commits[1].oid);
+    }
+
+    #[test]
+    fn test_commits_after_returns_next_batch() {
+        let (_dir, repo) = init_test_repo_with_commits(5);
+        let all = repo.commits(5).unwrap();
+        // all[0] = commit 4, all[1] = commit 3, ..., all[4] = commit 0
+        let after = repo.commits_after(&all[1].oid, 2).unwrap();
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[0].oid, all[2].oid);
+        assert_eq!(after[1].oid, all[3].oid);
+    }
+
+    #[test]
+    fn test_commits_after_returns_empty_at_end() {
+        let (_dir, repo) = init_test_repo_with_commits(3);
+        let all = repo.commits(3).unwrap();
+        let after = repo.commits_after(&all[2].oid, 10).unwrap();
+        assert!(after.is_empty());
+    }
+
+    #[test]
+    fn test_commits_after_unknown_oid_returns_empty() {
+        let (_dir, repo) = init_test_repo_with_commits(3);
+        let after = repo.commits_after("nonexistent", 10).unwrap();
+        assert!(after.is_empty());
     }
 
     #[test]
