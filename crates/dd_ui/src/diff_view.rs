@@ -1,8 +1,24 @@
+use std::ops::Range;
+
 use gpui::prelude::*;
-use gpui::{Context, Window};
+use gpui::{Context, HighlightStyle, Hsla, SharedString, StyledText, Window};
 use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
 use dd_git::{DiffLine, FileDiff, Hunk, LineOrigin};
+
+use crate::syntax;
+use crate::theme::DiffTheme;
+
+fn fallback_color(
+    origin: &LineOrigin,
+    diff_theme: &DiffTheme,
+    theme: &gpui_component::Theme,
+) -> Hsla {
+    match origin {
+        LineOrigin::Context => diff_theme.ctx_fg,
+        _ => theme.foreground,
+    }
+}
 
 pub struct DiffView {
     diffs: Vec<FileDiff>,
@@ -45,10 +61,16 @@ impl DiffView {
             dd_git::FileStatus::Renamed => "R",
         };
 
+        let path_display = if let Some(ref old) = file.old_path {
+            format!("{} {} \u{2192} {}", status_label, old, file.path)
+        } else {
+            format!("{} {}", status_label, file.path)
+        };
+
         let hunk_elements: Vec<_> = file
             .hunks
             .iter()
-            .map(|hunk| self.render_hunk(hunk, cx))
+            .map(|hunk| self.render_hunk(hunk, &file.path, cx))
             .collect();
 
         v_flex()
@@ -61,40 +83,19 @@ impl DiffView {
                     .bg(cx.theme().muted)
                     .text_sm()
                     .font_weight(gpui::FontWeight::BOLD)
-                    .child(format!("{} {}", status_label, file.path)),
+                    .child(path_display),
             )
             .children(hunk_elements)
     }
 
-    fn render_hunk(&self, hunk: &Hunk, cx: &Context<Self>) -> impl IntoElement {
-        let mut old_line = hunk.old_start;
-        let mut new_line = hunk.new_start;
+    fn render_hunk(&self, hunk: &Hunk, file_path: &str, cx: &Context<Self>) -> impl IntoElement {
+        let diff_theme = DiffTheme::from_cx(cx);
+        let theme = cx.theme();
 
         let line_elements: Vec<_> = hunk
             .lines
             .iter()
-            .map(|line| {
-                let (old_num, new_num) = match line.origin {
-                    LineOrigin::Context => {
-                        let o = old_line;
-                        let n = new_line;
-                        old_line += 1;
-                        new_line += 1;
-                        (Some(o), Some(n))
-                    }
-                    LineOrigin::Addition => {
-                        let n = new_line;
-                        new_line += 1;
-                        (None, Some(n))
-                    }
-                    LineOrigin::Deletion => {
-                        let o = old_line;
-                        old_line += 1;
-                        (Some(o), None)
-                    }
-                };
-                self.render_diff_line(line, old_num, new_num, cx)
-            })
+            .map(|line| self.render_diff_line(line, file_path, &diff_theme, cx))
             .collect();
 
         v_flex()
@@ -104,8 +105,8 @@ impl DiffView {
                     .px_3()
                     .py_0p5()
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .bg(cx.theme().muted)
+                    .text_color(theme.muted_foreground)
+                    .bg(theme.muted)
                     .child(hunk.header.clone()),
             )
             .children(line_elements)
@@ -114,63 +115,131 @@ impl DiffView {
     fn render_diff_line(
         &self,
         line: &DiffLine,
-        old_num: Option<u32>,
-        new_num: Option<u32>,
+        file_path: &str,
+        diff_theme: &DiffTheme,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let (prefix, bg_color, text_color) = match line.origin {
-            LineOrigin::Addition => (
-                "+",
-                gpui::hsla(120.0 / 360.0, 0.4, 0.15, 1.0),
-                gpui::hsla(120.0 / 360.0, 0.6, 0.7, 1.0),
-            ),
-            LineOrigin::Deletion => (
-                "-",
-                gpui::hsla(0.0, 0.4, 0.15, 1.0),
-                gpui::hsla(0.0, 0.6, 0.7, 1.0),
-            ),
-            LineOrigin::Context => (
-                " ",
-                gpui::hsla(0.0, 0.0, 0.0, 0.0),
-                cx.theme().muted_foreground,
-            ),
+        let theme = cx.theme();
+
+        let (prefix, bg_color) = match line.origin {
+            LineOrigin::Addition => ("+", diff_theme.add_bg),
+            LineOrigin::Deletion => ("-", diff_theme.del_bg),
+            LineOrigin::Context => (" ", diff_theme.ctx_bg),
         };
 
-        let old_str = old_num
+        let fg = fallback_color(&line.origin, diff_theme, theme);
+
+        let old_str = line
+            .old_line_no
             .map(|n| format!("{:>4}", n))
             .unwrap_or_else(|| "    ".to_string());
-        let new_str = new_num
+        let new_str = line
+            .new_line_no
             .map(|n| format!("{:>4}", n))
             .unwrap_or_else(|| "    ".to_string());
 
         gpui::div()
             .w_full()
             .flex()
+            .overflow_x_hidden()
             .bg(bg_color)
             .text_xs()
-            .font_family("monospace")
+            .line_height(gpui::rems(1.0))
+            .font_family(theme.font_family.clone())
             .child(
                 gpui::div()
-                    .w(gpui::px(40.0))
-                    .text_color(cx.theme().muted_foreground)
+                    .w(gpui::px(48.0))
+                    .flex_shrink_0()
+                    .text_color(diff_theme.line_number_fg)
                     .text_right()
                     .px_1()
                     .child(old_str),
             )
             .child(
                 gpui::div()
-                    .w(gpui::px(40.0))
-                    .text_color(cx.theme().muted_foreground)
+                    .w(gpui::px(48.0))
+                    .flex_shrink_0()
+                    .text_color(diff_theme.line_number_fg)
                     .text_right()
                     .px_1()
                     .child(new_str),
             )
             .child(
                 gpui::div()
-                    .px_1()
-                    .text_color(text_color)
-                    .child(format!("{}{}", prefix, line.content)),
+                    .flex_shrink_0()
+                    .text_color(fg)
+                    .child(prefix.to_string()),
             )
+            .child(
+                gpui::div()
+                    .px_1()
+                    .overflow_x_hidden()
+                    .child(self.render_content(line, file_path, diff_theme, cx)),
+            )
+    }
+
+    fn render_content(
+        &self,
+        line: &DiffLine,
+        file_path: &str,
+        diff_theme: &DiffTheme,
+        cx: &Context<Self>,
+    ) -> StyledText {
+        let theme = cx.theme();
+        let content = &line.content;
+
+        let fg = fallback_color(&line.origin, diff_theme, theme);
+        let is_dark = theme.background.l < 0.5;
+
+        let highlight_bg = match line.origin {
+            LineOrigin::Addition => diff_theme.add_highlight_bg,
+            LineOrigin::Deletion => diff_theme.del_highlight_bg,
+            LineOrigin::Context => diff_theme.ctx_bg,
+        };
+
+        let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+
+        // Syntax foreground colors
+        let syntax_highlights = syntax::highlight_line(file_path, content, fg, is_dark);
+        for sh in &syntax_highlights {
+            highlights.push((
+                sh.range.clone(),
+                HighlightStyle {
+                    color: Some(sh.color),
+                    ..Default::default()
+                },
+            ));
+        }
+
+        // Change-span background colors
+        for cs in &line.change_spans {
+            highlights.push((
+                cs.start..cs.end,
+                HighlightStyle {
+                    background_color: Some(highlight_bg),
+                    ..Default::default()
+                },
+            ));
+        }
+
+        StyledText::new(SharedString::from(content.clone())).with_highlights(highlights)
+    }
+}
+
+impl DiffView {
+    fn render_unified(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let file_elements: Vec<_> = self
+            .diffs
+            .iter()
+            .map(|file| self.render_file_diff(file, cx))
+            .collect();
+
+        v_flex()
+            .size_full()
+            .overflow_y_scrollbar()
+            .gap_2()
+            .children(file_elements)
+            .into_any_element()
     }
 }
 
@@ -204,18 +273,7 @@ impl Render for DiffView {
                 .into_any_element();
         }
 
-        let file_elements: Vec<_> = self
-            .diffs
-            .iter()
-            .map(|file| self.render_file_diff(file, cx))
-            .collect();
-
-        v_flex()
-            .size_full()
-            .overflow_y_scrollbar()
-            .gap_2()
-            .children(file_elements)
-            .into_any_element()
+        self.render_unified(cx)
     }
 }
 
@@ -227,6 +285,7 @@ mod tests {
     fn mock_diffs() -> Vec<FileDiff> {
         vec![FileDiff {
             path: "src/main.rs".into(),
+            old_path: None,
             status: FileStatus::Modified,
             hunks: vec![Hunk {
                 header: "@@ -1,3 +1,4 @@".into(),
@@ -238,22 +297,37 @@ mod tests {
                     DiffLine {
                         origin: LineOrigin::Context,
                         content: "fn main() {".into(),
+                        old_line_no: Some(1),
+                        new_line_no: Some(1),
+                        change_spans: vec![],
                     },
                     DiffLine {
                         origin: LineOrigin::Deletion,
                         content: "    println!(\"hello\");".into(),
+                        old_line_no: Some(2),
+                        new_line_no: None,
+                        change_spans: vec![],
                     },
                     DiffLine {
                         origin: LineOrigin::Addition,
                         content: "    println!(\"hello world\");".into(),
+                        old_line_no: None,
+                        new_line_no: Some(2),
+                        change_spans: vec![],
                     },
                     DiffLine {
                         origin: LineOrigin::Addition,
                         content: "    println!(\"goodbye\");".into(),
+                        old_line_no: None,
+                        new_line_no: Some(3),
+                        change_spans: vec![],
                     },
                     DiffLine {
                         origin: LineOrigin::Context,
                         content: "}".into(),
+                        old_line_no: Some(3),
+                        new_line_no: Some(4),
+                        change_spans: vec![],
                     },
                 ],
             }],
