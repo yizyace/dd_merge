@@ -4,7 +4,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use gix::bstr::ByteSlice;
 
-use crate::commit::CommitInfo;
+use crate::commit::{CommitInfo, SignatureStatus};
 use crate::diff::FileDiff;
 use crate::types::{BranchInfo, RemoteInfo, StashInfo, TagInfo};
 
@@ -101,7 +101,9 @@ impl Repository {
             let info = info?;
             let commit = info.object()?;
             let author = commit.author()?;
+            let committer = commit.committer()?;
             let message = commit.message()?;
+            let tree_oid = commit.tree_id()?.to_hex().to_string();
             let parent_oids: Vec<String> = info
                 .parent_ids
                 .iter()
@@ -114,9 +116,13 @@ impl Repository {
             commits.push(CommitInfo {
                 oid,
                 short_oid,
+                tree_oid,
                 author_name: author.name.to_string(),
                 author_email: author.email.to_string(),
                 date: author.time.seconds,
+                committer_name: committer.name.to_string(),
+                committer_email: committer.email.to_string(),
+                committer_date: committer.time.seconds,
                 subject: message.title.to_str_lossy().trim().to_string(),
                 body: message
                     .body
@@ -150,6 +156,36 @@ impl Repository {
             }
         }
         Ok(false)
+    }
+
+    pub fn commit_signature_status(&self, oid: &str) -> Result<SignatureStatus> {
+        anyhow::ensure!(
+            oid.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid commit OID: {oid}"
+        );
+
+        let workdir = self
+            .inner
+            .work_dir()
+            .context("repository has no working directory")?;
+
+        let output = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%G?", oid])
+            .current_dir(workdir)
+            .output()
+            .context("failed to run git log for signature status")?;
+
+        if !output.status.success() {
+            return Ok(SignatureStatus::None);
+        }
+
+        let status_char = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .chars()
+            .next()
+            .unwrap_or('N');
+
+        Ok(SignatureStatus::from_git_char(status_char))
     }
 
     pub fn diff_commit(&self, oid: &str) -> Result<Vec<FileDiff>> {
@@ -409,5 +445,29 @@ mod tests {
         let repo = Repository::open(path).unwrap();
         let result = repo.checkout_branch("other");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_commit_has_tree_oid() {
+        let (_dir, repo) = init_test_repo_with_commits(1);
+        let commits = repo.commits(1).unwrap();
+        assert!(!commits[0].tree_oid.is_empty());
+    }
+
+    #[test]
+    fn test_commit_has_committer_fields() {
+        let (_dir, repo) = init_test_repo_with_commits(1);
+        let commits = repo.commits(1).unwrap();
+        assert_eq!(commits[0].committer_name, "Test User");
+        assert_eq!(commits[0].committer_email, "test@test.com");
+        assert!(commits[0].committer_date > 0);
+    }
+
+    #[test]
+    fn test_commit_signature_status_unsigned() {
+        let (_dir, repo) = init_test_repo_with_commits(1);
+        let commits = repo.commits(1).unwrap();
+        let status = repo.commit_signature_status(&commits[0].oid).unwrap();
+        assert_eq!(status, SignatureStatus::None);
     }
 }

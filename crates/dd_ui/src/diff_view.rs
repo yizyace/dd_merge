@@ -7,7 +7,9 @@ use gpui::{
 };
 use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
-use dd_git::{split_hunk_lines, DiffLine, FileDiff, Hunk, LineOrigin, SplitRow};
+use dd_git::{
+    split_hunk_lines, CommitInfo, DiffLine, FileDiff, Hunk, LineOrigin, SignatureStatus, SplitRow,
+};
 
 use crate::syntax;
 use crate::theme::DiffTheme;
@@ -39,6 +41,8 @@ enum SplitSide {
 
 pub struct DiffView {
     diffs: Vec<FileDiff>,
+    commit_info: Option<CommitInfo>,
+    signature_status: Option<SignatureStatus>,
     error_message: Option<String>,
     mode: DiffViewMode,
 }
@@ -47,6 +51,8 @@ impl DiffView {
     pub fn new_empty() -> Self {
         Self {
             diffs: Vec::new(),
+            commit_info: None,
+            signature_status: None,
             error_message: None,
             mode: DiffViewMode::Unified,
         }
@@ -56,11 +62,31 @@ impl DiffView {
         &self.diffs
     }
 
+    pub fn commit_info(&self) -> Option<&CommitInfo> {
+        self.commit_info.as_ref()
+    }
+
     pub fn error_message(&self) -> Option<&str> {
         self.error_message.as_deref()
     }
 
     pub fn set_diffs(&mut self, diffs: Vec<FileDiff>, cx: &mut Context<Self>) {
+        self.diffs = diffs;
+        self.commit_info = None;
+        self.signature_status = None;
+        self.error_message = None;
+        cx.notify();
+    }
+
+    pub fn set_commit_data(
+        &mut self,
+        commit: CommitInfo,
+        signature: SignatureStatus,
+        diffs: Vec<FileDiff>,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_info = Some(commit);
+        self.signature_status = Some(signature);
         self.diffs = diffs;
         self.error_message = None;
         cx.notify();
@@ -69,6 +95,8 @@ impl DiffView {
     pub fn set_error(&mut self, message: String, cx: &mut Context<Self>) {
         self.error_message = Some(message);
         self.diffs.clear();
+        self.commit_info = None;
+        self.signature_status = None;
         cx.notify();
     }
 
@@ -153,12 +181,13 @@ impl DiffView {
             .map(|file| self.render_file_diff(file, cx))
             .collect();
 
-        v_flex()
-            .size_full()
-            .overflow_y_scrollbar()
-            .gap_2()
-            .children(file_elements)
-            .into_any_element()
+        let mut container = v_flex().size_full().overflow_y_scrollbar().gap_2();
+
+        if self.commit_info.is_some() {
+            container = container.child(self.render_commit_header(cx));
+        }
+
+        container.children(file_elements).into_any_element()
     }
 
     fn render_file_diff(&self, file: &FileDiff, cx: &Context<Self>) -> impl IntoElement {
@@ -265,6 +294,152 @@ impl DiffView {
             )
     }
 
+    // -- Commit header -----------------------------------------------------
+}
+
+fn compute_stats(diffs: &[FileDiff]) -> (usize, usize, usize) {
+    let files = diffs.len();
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+    for file in diffs {
+        for hunk in &file.hunks {
+            for line in &hunk.lines {
+                match line.origin {
+                    LineOrigin::Addition => additions += 1,
+                    LineOrigin::Deletion => deletions += 1,
+                    LineOrigin::Context => {}
+                }
+            }
+        }
+    }
+    (files, additions, deletions)
+}
+
+fn format_commit_date(timestamp: i64) -> String {
+    use chrono::{DateTime, Local, TimeZone};
+    match Local.timestamp_opt(timestamp, 0) {
+        chrono::LocalResult::Single(dt) => dt.format("%a, %b %-d, %Y, %-I:%M %p").to_string(),
+        _ => match DateTime::from_timestamp(timestamp, 0) {
+            Some(dt) => dt.format("%a, %b %-d, %Y, %-I:%M %p UTC").to_string(),
+            None => "unknown".to_string(),
+        },
+    }
+}
+
+const LABEL_WIDTH: f32 = 100.0;
+
+impl DiffView {
+    fn render_commit_header(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let commit = self.commit_info.as_ref().unwrap();
+        let signature = self.signature_status.unwrap_or(SignatureStatus::None);
+
+        let parents_str = if commit.parent_oids.is_empty() {
+            "(root commit)".to_string()
+        } else {
+            commit
+                .parent_oids
+                .iter()
+                .map(|p| &p[..7.min(p.len())])
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let (files, additions, deletions) = compute_stats(&self.diffs);
+        let stats_str = format!(
+            "{} file{}, +{} addition{}, -{} deletion{}",
+            files,
+            if files == 1 { "" } else { "s" },
+            additions,
+            if additions == 1 { "" } else { "s" },
+            deletions,
+            if deletions == 1 { "" } else { "s" },
+        );
+
+        let sig_color = match signature {
+            SignatureStatus::Good => theme.success,
+            SignatureStatus::Bad => theme.danger,
+            _ => theme.muted_foreground,
+        };
+
+        let mut header = v_flex().w_full().px_3().py_2().gap_0p5();
+
+        let rows: Vec<(&str, String, Option<Hsla>)> = vec![
+            ("Commit", commit.oid.clone(), None),
+            ("Tree", commit.tree_oid.clone(), None),
+            (
+                "Author",
+                format!("{} <{}>", commit.author_name, commit.author_email),
+                None,
+            ),
+            (
+                "Committer",
+                format!("{} <{}>", commit.committer_name, commit.committer_email),
+                None,
+            ),
+            ("Date", format_commit_date(commit.date), None),
+            ("Parents", parents_str, None),
+            ("Signature", signature.label().to_string(), Some(sig_color)),
+            ("Stats", stats_str, None),
+        ];
+
+        for (label, value, color) in rows {
+            header = header.child(
+                gpui::div()
+                    .flex()
+                    .w_full()
+                    .text_xs()
+                    .font_family(theme.font_family.clone())
+                    .child(
+                        gpui::div()
+                            .w(gpui::px(LABEL_WIDTH))
+                            .flex_shrink_0()
+                            .text_right()
+                            .pr_2()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{}:", label)),
+                    )
+                    .child(
+                        gpui::div()
+                            .text_color(color.unwrap_or(theme.foreground))
+                            .child(value),
+                    ),
+            );
+        }
+
+        header = header.child(
+            v_flex()
+                .mt_2()
+                .px_1()
+                .gap_0p5()
+                .child(
+                    gpui::div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(theme.foreground)
+                        .child(commit.subject.clone()),
+                )
+                .when(!commit.body.is_empty(), |el| {
+                    el.child(
+                        gpui::div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(commit.body.clone()),
+                    )
+                }),
+        );
+
+        header = header.child(
+            gpui::div()
+                .mt_2()
+                .w_full()
+                .h(gpui::px(1.0))
+                .bg(theme.border),
+        );
+
+        header
+    }
+
     // -- Split rendering --------------------------------------------------
 
     fn render_split(&self, cx: &Context<Self>) -> gpui::AnyElement {
@@ -274,12 +449,13 @@ impl DiffView {
             .map(|file| self.render_file_diff_split(file, cx))
             .collect();
 
-        v_flex()
-            .size_full()
-            .overflow_y_scrollbar()
-            .gap_2()
-            .children(file_elements)
-            .into_any_element()
+        let mut container = v_flex().size_full().overflow_y_scrollbar().gap_2();
+
+        if self.commit_info.is_some() {
+            container = container.child(self.render_commit_header(cx));
+        }
+
+        container.children(file_elements).into_any_element()
     }
 
     fn render_file_diff_split(&self, file: &FileDiff, cx: &Context<Self>) -> impl IntoElement {
@@ -489,7 +665,7 @@ impl Render for DiffView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dd_git::{FileStatus, Hunk};
+    use dd_git::{FileStatus, Hunk, SignatureStatus};
 
     fn mock_diffs() -> Vec<FileDiff> {
         vec![FileDiff {
@@ -628,6 +804,121 @@ mod tests {
                 assert_eq!(view.diffs().len(), 1);
                 assert_eq!(view.diffs()[0].path, "src/main.rs");
                 assert_eq!(view.diffs()[0].hunks[0].lines.len(), 5);
+            })
+            .unwrap();
+    }
+
+    fn mock_commit() -> CommitInfo {
+        CommitInfo {
+            oid: "abc123def456".into(),
+            short_oid: "abc123d".into(),
+            tree_oid: "tree111aaa".into(),
+            author_name: "Alice".into(),
+            author_email: "alice@example.com".into(),
+            date: 1700000000,
+            committer_name: "Alice".into(),
+            committer_email: "alice@example.com".into(),
+            committer_date: 1700000000,
+            subject: "feat: add login".into(),
+            body: "Detailed description of the change.".into(),
+            parent_oids: vec!["def456abc789".into()],
+        }
+    }
+
+    #[test]
+    fn test_compute_stats() {
+        let diffs = mock_diffs();
+        let (files, additions, deletions) = compute_stats(&diffs);
+        assert_eq!(files, 1);
+        assert_eq!(additions, 2);
+        assert_eq!(deletions, 1);
+    }
+
+    #[test]
+    fn test_compute_stats_empty() {
+        let (files, additions, deletions) = compute_stats(&[]);
+        assert_eq!(files, 0);
+        assert_eq!(additions, 0);
+        assert_eq!(deletions, 0);
+    }
+
+    #[test]
+    fn test_format_commit_date() {
+        let formatted = format_commit_date(1700000000);
+        // Should produce a human-readable date string
+        assert!(!formatted.is_empty());
+        assert_ne!(formatted, "unknown");
+    }
+
+    #[test]
+    fn test_format_commit_date_invalid() {
+        let formatted = format_commit_date(i64::MIN);
+        assert_eq!(formatted, "unknown");
+    }
+
+    #[test]
+    fn test_signature_status_from_git_char() {
+        assert_eq!(SignatureStatus::from_git_char('G'), SignatureStatus::Good);
+        assert_eq!(SignatureStatus::from_git_char('B'), SignatureStatus::Bad);
+        assert_eq!(
+            SignatureStatus::from_git_char('U'),
+            SignatureStatus::Unknown
+        );
+        assert_eq!(SignatureStatus::from_git_char('N'), SignatureStatus::None);
+        assert_eq!(SignatureStatus::from_git_char('?'), SignatureStatus::None);
+    }
+
+    #[test]
+    fn test_signature_status_label() {
+        assert_eq!(SignatureStatus::Good.label(), "Valid");
+        assert_eq!(SignatureStatus::Bad.label(), "Invalid");
+        assert_eq!(SignatureStatus::Unknown.label(), "Unknown");
+        assert_eq!(SignatureStatus::None.label(), "None");
+    }
+
+    #[gpui::test]
+    fn test_set_commit_data(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::test_helpers::init_test_theme(cx));
+        let window = cx.add_window(|_window, _cx| DiffView::new_empty());
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.set_commit_data(mock_commit(), SignatureStatus::None, mock_diffs(), cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert!(view.commit_info().is_some());
+                assert_eq!(view.commit_info().unwrap().subject, "feat: add login");
+                assert_eq!(view.diffs().len(), 1);
+                assert!(view.error_message().is_none());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_set_error_clears_commit_info(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| crate::test_helpers::init_test_theme(cx));
+        let window = cx.add_window(|_window, _cx| DiffView::new_empty());
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.set_commit_data(mock_commit(), SignatureStatus::Good, mock_diffs(), cx);
+            })
+            .unwrap();
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.set_error("oops".into(), cx);
+            })
+            .unwrap();
+
+        window
+            .read_with(cx, |view, _cx| {
+                assert!(view.commit_info().is_none());
+                assert!(view.diffs().is_empty());
+                assert_eq!(view.error_message(), Some("oops"));
             })
             .unwrap();
     }
