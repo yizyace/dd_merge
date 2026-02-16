@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{Context, Window};
+use gpui::{Context, ScrollHandle, Window};
 use gpui_component::{h_flex, ActiveTheme};
 
 pub struct TabInfo {
@@ -35,6 +35,7 @@ impl Render for DragPreview {
 pub struct TabBar {
     tabs: Vec<TabInfo>,
     hovered_close: Option<usize>,
+    scroll_handle: ScrollHandle,
     #[allow(clippy::type_complexity)]
     on_select: Option<Box<dyn Fn(usize, &mut Window, &mut Context<Self>) + 'static>>,
     #[allow(clippy::type_complexity)]
@@ -54,6 +55,7 @@ impl TabBar {
         Self {
             tabs: Vec::new(),
             hovered_close: None,
+            scroll_handle: ScrollHandle::new(),
             on_select: None,
             on_close: None,
             on_reorder: None,
@@ -61,6 +63,9 @@ impl TabBar {
     }
 
     pub fn set_tabs(&mut self, tabs: Vec<TabInfo>, cx: &mut Context<Self>) {
+        if let Some(active_index) = tabs.iter().position(|t| t.is_active) {
+            self.scroll_handle.scroll_to_item(active_index);
+        }
         self.tabs = tabs;
         self.hovered_close = None;
         cx.notify();
@@ -130,6 +135,7 @@ impl Render for TabBar {
 
                 h_flex()
                     .id(gpui::ElementId::Integer(i as u64))
+                    .flex_shrink_0()
                     .px_3()
                     .py_1()
                     .gap_2()
@@ -197,8 +203,14 @@ impl Render for TabBar {
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
-            .overflow_x_hidden()
-            .children(tab_elements)
+            .child(
+                h_flex()
+                    .id("tab-scroll-area")
+                    .flex_1()
+                    .overflow_x_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    .children(tab_elements),
+            )
             .into_any_element()
     }
 }
@@ -356,5 +368,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(reordered.get(), Some((0, 2)));
+    }
+
+    #[gpui::test]
+    fn test_many_tabs_scrolls_to_active(cx: &mut TestAppContext) {
+        cx.update(|cx| init_test_theme(cx));
+
+        let window = cx.add_window(|_window, _cx| TabBar::new());
+
+        let active_index = 15;
+        let tabs: Vec<TabInfo> = (0..20)
+            .map(|i| TabInfo {
+                name: format!("repo{}", i),
+                is_active: i == active_index,
+                is_dirty: false,
+            })
+            .collect();
+
+        window
+            .update(cx, |bar, _window, cx| {
+                bar.set_tabs(tabs, cx);
+            })
+            .unwrap();
+
+        window
+            .update(cx, |bar, _window, _cx| {
+                assert_eq!(bar.tabs.len(), 20);
+                assert!(bar.tabs[active_index].is_active);
+            })
+            .unwrap();
     }
 }
