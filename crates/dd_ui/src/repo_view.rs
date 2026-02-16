@@ -50,6 +50,7 @@ impl RepoView {
         };
         view.load_repo_data(cx);
         view.setup_commit_selection(cx);
+        view.setup_branch_checkout(cx);
         view
     }
 
@@ -95,6 +96,58 @@ impl RepoView {
                     }
                 },
             );
+        });
+    }
+
+    fn setup_branch_checkout(&mut self, cx: &mut Context<Self>) {
+        let commit_list = self.commit_list.clone();
+        let diff_view = self.diff_view.clone();
+        let repo_path = self.path.clone();
+
+        self.sidebar.update(cx, |sb, _cx| {
+            sb.on_branch_checkout(move |branch, window, cx| {
+                let branch_name = branch.name.clone();
+                let repo_path = repo_path.clone();
+                let commit_list = commit_list.clone();
+                let diff_view = diff_view.clone();
+
+                // Defer to avoid re-entrant borrow of the sidebar entity,
+                // which is already held by the on_click listener.
+                cx.defer_in(window, move |sb, _window, cx| {
+                    match Repository::open(&repo_path) {
+                        Ok(repo) => {
+                            if let Err(e) = repo.checkout_branch(&branch_name) {
+                                eprintln!("checkout failed: {e}");
+                                return;
+                            }
+                            // Re-open repo to pick up new HEAD
+                            if let Ok(repo) = Repository::open(&repo_path) {
+                                let branches = repo.branches().unwrap_or_default();
+                                let remotes = repo.remotes().unwrap_or_default();
+                                let tags = repo.tags().unwrap_or_default();
+                                let stashes = repo.stashes().unwrap_or_default();
+                                sb.set_data(
+                                    SidebarData {
+                                        branches,
+                                        remotes,
+                                        tags,
+                                        stashes,
+                                    },
+                                    cx,
+                                );
+                                let commits = repo.commits(COMMIT_LIMIT).unwrap_or_default();
+                                commit_list.update(cx, |list, cx| {
+                                    list.set_commits(commits, cx);
+                                });
+                                diff_view.update(cx, |view, cx| {
+                                    view.set_diffs(vec![], cx);
+                                });
+                            }
+                        }
+                        Err(e) => eprintln!("failed to open repo: {e}"),
+                    }
+                });
+            });
         });
     }
 
