@@ -1,11 +1,13 @@
 mod inline;
 mod parse;
+mod split;
 
 use std::path::Path;
 
 use anyhow::Result;
 
 pub use parse::parse_unified_diff;
+pub use split::{split_hunk_lines, SplitRow};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LineOrigin {

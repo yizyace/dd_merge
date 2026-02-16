@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{Context, Window};
+use gpui::{Context, MouseButton, MouseDownEvent, Window};
 use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
 use dd_git::CommitInfo;
@@ -42,6 +42,9 @@ impl CommitList {
     }
 
     pub fn select_commit(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_index == Some(index) {
+            return;
+        }
         if let Some(commit) = self.commits.get(index) {
             self.selected_index = Some(index);
             if let Some(ref on_select) = self.on_select {
@@ -86,9 +89,12 @@ impl CommitList {
                     el.bg(cx.theme().muted)
                 }
             })
-            .on_click(cx.listener(move |view, _event, window, cx| {
-                view.select_commit(index, window, cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _event: &MouseDownEvent, window, cx| {
+                    view.select_commit(index, window, cx);
+                }),
+            )
             .child(
                 v_flex()
                     .gap_0p5()

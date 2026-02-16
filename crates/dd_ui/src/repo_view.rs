@@ -20,6 +20,8 @@ const COMMIT_LIST_INITIAL_SIZE: f32 = 400.0;
 const COMMIT_LIST_MIN_SIZE: f32 = 40.0;
 const COMMIT_LIST_MAX_SIZE: f32 = 800.0;
 
+const MIN_DIFF_VIEW_WIDTH: f32 = 200.0;
+
 pub struct RepoView {
     path: PathBuf,
     repo_name: String,
@@ -125,22 +127,37 @@ impl RepoView {
 
 impl Render for RepoView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        gpui::div().size_full().child(
-            h_resizable("repo-panels")
-                .child(
-                    resizable_panel()
-                        .size(px(SIDEBAR_INITIAL_SIZE))
-                        .size_range(px(SIDEBAR_MIN_SIZE)..px(SIDEBAR_MAX_SIZE))
-                        .child(self.sidebar.clone()),
-                )
-                .child(
-                    resizable_panel()
-                        .size(px(COMMIT_LIST_INITIAL_SIZE))
-                        .size_range(px(COMMIT_LIST_MIN_SIZE)..px(COMMIT_LIST_MAX_SIZE))
-                        .child(self.commit_list.clone()),
-                )
-                .child(resizable_panel().child(self.diff_view.clone())),
-        )
+        gpui::div()
+            .size_full()
+            .flex()
+            .child(
+                gpui::div()
+                    .flex_shrink_0()
+                    .w(px(SIDEBAR_INITIAL_SIZE + COMMIT_LIST_INITIAL_SIZE))
+                    .h_full()
+                    .child(
+                        h_resizable("left-panels")
+                            .child(
+                                resizable_panel()
+                                    .size(px(SIDEBAR_INITIAL_SIZE))
+                                    .size_range(px(SIDEBAR_MIN_SIZE)..px(SIDEBAR_MAX_SIZE))
+                                    .child(self.sidebar.clone()),
+                            )
+                            .child(
+                                resizable_panel()
+                                    .size(px(COMMIT_LIST_INITIAL_SIZE))
+                                    .size_range(px(COMMIT_LIST_MIN_SIZE)..px(COMMIT_LIST_MAX_SIZE))
+                                    .child(self.commit_list.clone()),
+                            ),
+                    ),
+            )
+            .child(
+                gpui::div()
+                    .flex_1()
+                    .min_w(px(MIN_DIFF_VIEW_WIDTH))
+                    .h_full()
+                    .child(self.diff_view.clone()),
+            )
     }
 }
 

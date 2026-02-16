@@ -1,13 +1,18 @@
 use std::ops::Range;
 
 use gpui::prelude::*;
-use gpui::{Context, HighlightStyle, Hsla, SharedString, StyledText, Window};
+use gpui::{
+    canvas, px, App, Bounds, Context, HighlightStyle, Hsla, Pixels, SharedString, StyledText,
+    Window,
+};
 use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
-use dd_git::{DiffLine, FileDiff, Hunk, LineOrigin};
+use dd_git::{split_hunk_lines, DiffLine, FileDiff, Hunk, LineOrigin, SplitRow};
 
 use crate::syntax;
 use crate::theme::DiffTheme;
+
+const SPLIT_VIEW_MIN_WIDTH: f32 = 1000.0;
 
 fn fallback_color(
     origin: &LineOrigin,
@@ -20,9 +25,22 @@ fn fallback_color(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffViewMode {
+    Unified,
+    Split,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SplitSide {
+    Left,
+    Right,
+}
+
 pub struct DiffView {
     diffs: Vec<FileDiff>,
     error_message: Option<String>,
+    mode: DiffViewMode,
 }
 
 impl DiffView {
@@ -30,6 +48,7 @@ impl DiffView {
         Self {
             diffs: Vec::new(),
             error_message: None,
+            mode: DiffViewMode::Unified,
         }
     }
 
@@ -53,7 +72,9 @@ impl DiffView {
         cx.notify();
     }
 
-    fn render_file_diff(&self, file: &FileDiff, cx: &Context<Self>) -> impl IntoElement {
+    // -- Shared helpers ---------------------------------------------------
+
+    fn render_file_header(&self, file: &FileDiff, cx: &Context<Self>) -> gpui::Div {
         let status_label = match file.status {
             dd_git::FileStatus::Added => "A",
             dd_git::FileStatus::Deleted => "D",
@@ -67,6 +88,80 @@ impl DiffView {
             format!("{} {}", status_label, file.path)
         };
 
+        gpui::div()
+            .px_3()
+            .py_1()
+            .bg(cx.theme().muted)
+            .text_sm()
+            .font_weight(gpui::FontWeight::BOLD)
+            .child(path_display)
+    }
+
+    fn render_content(
+        &self,
+        line: &DiffLine,
+        file_path: &str,
+        diff_theme: &DiffTheme,
+        cx: &Context<Self>,
+    ) -> StyledText {
+        let theme = cx.theme();
+        let content = &line.content;
+
+        let fg = fallback_color(&line.origin, diff_theme, theme);
+        let is_dark = theme.background.l < 0.5;
+
+        let highlight_bg = match line.origin {
+            LineOrigin::Addition => diff_theme.add_highlight_bg,
+            LineOrigin::Deletion => diff_theme.del_highlight_bg,
+            LineOrigin::Context => diff_theme.ctx_bg,
+        };
+
+        let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+
+        // Syntax foreground colors
+        let syntax_highlights = syntax::highlight_line(file_path, content, fg, is_dark);
+        for sh in &syntax_highlights {
+            highlights.push((
+                sh.range.clone(),
+                HighlightStyle {
+                    color: Some(sh.color),
+                    ..Default::default()
+                },
+            ));
+        }
+
+        // Change-span background colors
+        for cs in &line.change_spans {
+            highlights.push((
+                cs.start..cs.end,
+                HighlightStyle {
+                    background_color: Some(highlight_bg),
+                    ..Default::default()
+                },
+            ));
+        }
+
+        StyledText::new(SharedString::from(content.clone())).with_highlights(highlights)
+    }
+
+    // -- Unified rendering ------------------------------------------------
+
+    fn render_unified(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let file_elements: Vec<_> = self
+            .diffs
+            .iter()
+            .map(|file| self.render_file_diff(file, cx))
+            .collect();
+
+        v_flex()
+            .size_full()
+            .overflow_y_scrollbar()
+            .gap_2()
+            .children(file_elements)
+            .into_any_element()
+    }
+
+    fn render_file_diff(&self, file: &FileDiff, cx: &Context<Self>) -> impl IntoElement {
         let hunk_elements: Vec<_> = file
             .hunks
             .iter()
@@ -76,15 +171,7 @@ impl DiffView {
         v_flex()
             .w_full()
             .gap_1()
-            .child(
-                gpui::div()
-                    .px_3()
-                    .py_1()
-                    .bg(cx.theme().muted)
-                    .text_sm()
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child(path_display),
-            )
+            .child(self.render_file_header(file, cx))
             .children(hunk_elements)
     }
 
@@ -178,60 +265,13 @@ impl DiffView {
             )
     }
 
-    fn render_content(
-        &self,
-        line: &DiffLine,
-        file_path: &str,
-        diff_theme: &DiffTheme,
-        cx: &Context<Self>,
-    ) -> StyledText {
-        let theme = cx.theme();
-        let content = &line.content;
+    // -- Split rendering --------------------------------------------------
 
-        let fg = fallback_color(&line.origin, diff_theme, theme);
-        let is_dark = theme.background.l < 0.5;
-
-        let highlight_bg = match line.origin {
-            LineOrigin::Addition => diff_theme.add_highlight_bg,
-            LineOrigin::Deletion => diff_theme.del_highlight_bg,
-            LineOrigin::Context => diff_theme.ctx_bg,
-        };
-
-        let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
-
-        // Syntax foreground colors
-        let syntax_highlights = syntax::highlight_line(file_path, content, fg, is_dark);
-        for sh in &syntax_highlights {
-            highlights.push((
-                sh.range.clone(),
-                HighlightStyle {
-                    color: Some(sh.color),
-                    ..Default::default()
-                },
-            ));
-        }
-
-        // Change-span background colors
-        for cs in &line.change_spans {
-            highlights.push((
-                cs.start..cs.end,
-                HighlightStyle {
-                    background_color: Some(highlight_bg),
-                    ..Default::default()
-                },
-            ));
-        }
-
-        StyledText::new(SharedString::from(content.clone())).with_highlights(highlights)
-    }
-}
-
-impl DiffView {
-    fn render_unified(&self, cx: &Context<Self>) -> gpui::AnyElement {
+    fn render_split(&self, cx: &Context<Self>) -> gpui::AnyElement {
         let file_elements: Vec<_> = self
             .diffs
             .iter()
-            .map(|file| self.render_file_diff(file, cx))
+            .map(|file| self.render_file_diff_split(file, cx))
             .collect();
 
         v_flex()
@@ -240,6 +280,139 @@ impl DiffView {
             .gap_2()
             .children(file_elements)
             .into_any_element()
+    }
+
+    fn render_file_diff_split(&self, file: &FileDiff, cx: &Context<Self>) -> impl IntoElement {
+        let hunk_elements: Vec<_> = file
+            .hunks
+            .iter()
+            .map(|hunk| self.render_hunk_split(hunk, &file.path, cx))
+            .collect();
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(self.render_file_header(file, cx))
+            .children(hunk_elements)
+    }
+
+    fn render_hunk_split(
+        &self,
+        hunk: &Hunk,
+        file_path: &str,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let diff_theme = DiffTheme::from_cx(cx);
+        let theme = cx.theme();
+        let rows = split_hunk_lines(&hunk.lines);
+
+        let row_elements: Vec<_> = rows
+            .iter()
+            .map(|row| self.render_split_row(row, file_path, &diff_theme, cx))
+            .collect();
+
+        v_flex()
+            .w_full()
+            .child(
+                gpui::div()
+                    .px_3()
+                    .py_0p5()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .bg(theme.muted)
+                    .child(hunk.header.clone()),
+            )
+            .children(row_elements)
+    }
+
+    fn render_split_row(
+        &self,
+        row: &SplitRow,
+        file_path: &str,
+        diff_theme: &DiffTheme,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        gpui::div()
+            .w_full()
+            .flex()
+            .text_xs()
+            .line_height(gpui::rems(1.0))
+            .font_family(theme.font_family.clone())
+            .child(self.render_split_half(
+                row.left.as_deref(),
+                SplitSide::Left,
+                file_path,
+                diff_theme,
+                cx,
+            ))
+            .child(gpui::div().w(px(1.0)).flex_shrink_0().bg(theme.border))
+            .child(self.render_split_half(
+                row.right.as_deref(),
+                SplitSide::Right,
+                file_path,
+                diff_theme,
+                cx,
+            ))
+    }
+
+    fn render_split_half(
+        &self,
+        line: Option<&DiffLine>,
+        side: SplitSide,
+        file_path: &str,
+        diff_theme: &DiffTheme,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let theme = cx.theme();
+
+        let Some(line) = line else {
+            return gpui::div()
+                .flex_1()
+                .flex()
+                .overflow_x_hidden()
+                .bg(theme.background);
+        };
+
+        let bg_color = match line.origin {
+            LineOrigin::Addition => diff_theme.add_bg,
+            LineOrigin::Deletion => diff_theme.del_bg,
+            LineOrigin::Context => diff_theme.ctx_bg,
+        };
+
+        let line_no_str = match side {
+            SplitSide::Left => line
+                .old_line_no
+                .map(|n| format!("{:>4}", n))
+                .unwrap_or_else(|| "    ".to_string()),
+            SplitSide::Right => line
+                .new_line_no
+                .map(|n| format!("{:>4}", n))
+                .unwrap_or_else(|| "    ".to_string()),
+        };
+
+        gpui::div()
+            .flex_1()
+            .flex()
+            .overflow_x_hidden()
+            .bg(bg_color)
+            .child(
+                gpui::div()
+                    .w(px(48.0))
+                    .flex_shrink_0()
+                    .text_color(diff_theme.line_number_fg)
+                    .text_right()
+                    .px_1()
+                    .child(line_no_str),
+            )
+            .child(
+                gpui::div()
+                    .px_1()
+                    .overflow_x_hidden()
+                    .whitespace_nowrap()
+                    .child(self.render_content(line, file_path, diff_theme, cx)),
+            )
     }
 }
 
@@ -273,7 +446,43 @@ impl Render for DiffView {
                 .into_any_element();
         }
 
-        self.render_unified(cx)
+        let weak = cx.entity().downgrade();
+
+        let content = match self.mode {
+            DiffViewMode::Unified => self.render_unified(cx),
+            DiffViewMode::Split => self.render_split(cx),
+        };
+
+        // Measure available width during layout and update mode for the next
+        // frame. The content uses the previous frame's mode (defaults to Unified);
+        // this is a standard one-frame-behind pattern in GPUI that converges
+        // after a single extra render cycle. Oscillation cannot occur because
+        // the diff view's width is determined by its parent resizable panel,
+        // not by the diff content.
+        v_flex()
+            .size_full()
+            .child(
+                canvas(
+                    move |bounds: Bounds<Pixels>, _window: &mut Window, app: &mut App| {
+                        let new_mode = if bounds.size.width >= px(SPLIT_VIEW_MIN_WIDTH) {
+                            DiffViewMode::Split
+                        } else {
+                            DiffViewMode::Unified
+                        };
+                        let _ = weak.update(app, |view: &mut DiffView, cx| {
+                            if view.mode != new_mode {
+                                view.mode = new_mode;
+                                cx.notify();
+                            }
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .w_full()
+                .h(px(0.)),
+            )
+            .child(content)
+            .into_any_element()
     }
 }
 
