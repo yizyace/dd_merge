@@ -199,7 +199,9 @@ impl Render for TabBar {
             .collect();
 
         h_flex()
+            .id("tab-bar")
             .w_full()
+            .flex_shrink_0()
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)

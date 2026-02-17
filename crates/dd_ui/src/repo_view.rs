@@ -75,27 +75,33 @@ impl RepoView {
         let repo_path = self.path.clone();
 
         self.commit_list.update(cx, |list, _cx| {
-            list.on_select(
-                move |commit, _window, cx| match Repository::open(&repo_path) {
-                    Ok(repo) => match repo.diff_commit(&commit.oid) {
-                        Ok(diffs) => {
-                            diff_view.update(cx, |view, cx| {
-                                view.set_diffs(diffs, cx);
-                            });
+            list.on_select(move |commit, _window, cx| {
+                let commit_info = commit.clone();
+                match Repository::open(&repo_path) {
+                    Ok(repo) => {
+                        let signature = repo
+                            .commit_signature_status(&commit_info.oid)
+                            .unwrap_or(dd_git::SignatureStatus::None);
+                        match repo.diff_commit(&commit_info.oid) {
+                            Ok(diffs) => {
+                                diff_view.update(cx, |view, cx| {
+                                    view.set_commit_data(commit_info, signature, diffs, cx);
+                                });
+                            }
+                            Err(e) => {
+                                diff_view.update(cx, |view, cx| {
+                                    view.set_error(format!("Failed to load diff: {e}"), cx);
+                                });
+                            }
                         }
-                        Err(e) => {
-                            diff_view.update(cx, |view, cx| {
-                                view.set_error(format!("Failed to load diff: {e}"), cx);
-                            });
-                        }
-                    },
+                    }
                     Err(e) => {
                         diff_view.update(cx, |view, cx| {
                             view.set_error(format!("Failed to open repository: {e}"), cx);
                         });
                     }
-                },
-            );
+                }
+            });
         });
     }
 
