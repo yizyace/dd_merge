@@ -10,7 +10,7 @@ use crate::commit_list::CommitList;
 use crate::diff_view::DiffView;
 use crate::sidebar::{Sidebar, SidebarData};
 
-const COMMIT_BATCH_SIZE: usize = 200;
+const COMMIT_LIMIT: usize = 100;
 
 const SIDEBAR_INITIAL_SIZE: f32 = 250.0;
 const SIDEBAR_MIN_SIZE: f32 = 40.0;
@@ -51,7 +51,6 @@ impl RepoView {
         view.load_repo_data(cx);
         view.setup_commit_selection(cx);
         view.setup_branch_checkout(cx);
-        view.setup_load_more(cx);
         view
     }
 
@@ -142,13 +141,9 @@ impl RepoView {
                                     },
                                     cx,
                                 );
-                                let commits = repo.commits(COMMIT_BATCH_SIZE).unwrap_or_default();
-                                let all_loaded = commits.len() < COMMIT_BATCH_SIZE;
+                                let commits = repo.commits(COMMIT_LIMIT).unwrap_or_default();
                                 commit_list.update(cx, |list, cx| {
                                     list.set_commits(commits, cx);
-                                    if all_loaded {
-                                        list.mark_all_loaded();
-                                    }
                                 });
                                 diff_view.update(cx, |view, cx| {
                                     view.set_diffs(vec![], cx);
@@ -158,20 +153,6 @@ impl RepoView {
                         Err(e) => eprintln!("failed to open repo: {e}"),
                     }
                 });
-            });
-        });
-    }
-
-    fn setup_load_more(&mut self, cx: &mut Context<Self>) {
-        let repo_path = self.path.clone();
-        self.commit_list.update(cx, |list, _cx| {
-            list.on_load_more(COMMIT_BATCH_SIZE, move |last_oid| {
-                match Repository::open(&repo_path) {
-                    Ok(repo) => repo
-                        .commits_after(last_oid, COMMIT_BATCH_SIZE)
-                        .unwrap_or_default(),
-                    Err(_) => Vec::new(),
-                }
             });
         });
     }
@@ -195,13 +176,9 @@ impl RepoView {
                 );
             });
 
-            let commits = repo.commits(COMMIT_BATCH_SIZE).unwrap_or_default();
-            let all_loaded = commits.len() < COMMIT_BATCH_SIZE;
+            let commits = repo.commits(COMMIT_LIMIT).unwrap_or_default();
             self.commit_list.update(cx, |list, cx| {
                 list.set_commits(commits, cx);
-                if all_loaded {
-                    list.mark_all_loaded();
-                }
             });
         }
     }

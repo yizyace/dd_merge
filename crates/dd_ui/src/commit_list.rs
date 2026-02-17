@@ -1,27 +1,14 @@
-use std::ops::Range;
-
 use gpui::prelude::*;
-use gpui::{
-    uniform_list, Context, MouseButton, MouseDownEvent, ScrollStrategy, UniformListScrollHandle,
-    Window,
-};
-use gpui_component::{v_flex, ActiveTheme};
+use gpui::{Context, MouseButton, MouseDownEvent, Window};
+use gpui_component::{scroll::ScrollableElement, v_flex, ActiveTheme};
 
 use dd_git::CommitInfo;
-
-const LOAD_MORE_THRESHOLD: usize = 20;
 
 pub struct CommitList {
     commits: Vec<CommitInfo>,
     selected_index: Option<usize>,
-    scroll_handle: UniformListScrollHandle,
-    loading_more: bool,
-    all_loaded: bool,
-    batch_size: usize,
     #[allow(clippy::type_complexity)]
     on_select: Option<Box<dyn Fn(&CommitInfo, &mut Window, &mut Context<Self>) + 'static>>,
-    #[allow(clippy::type_complexity)]
-    on_load_more: Option<Box<dyn Fn(&str) -> Vec<CommitInfo> + 'static>>,
 }
 
 impl CommitList {
@@ -29,20 +16,13 @@ impl CommitList {
         Self {
             commits: Vec::new(),
             selected_index: None,
-            scroll_handle: UniformListScrollHandle::new(),
-            loading_more: false,
-            all_loaded: false,
-            batch_size: 0,
             on_select: None,
-            on_load_more: None,
         }
     }
 
     pub fn set_commits(&mut self, commits: Vec<CommitInfo>, cx: &mut Context<Self>) {
         self.commits = commits;
         self.selected_index = None;
-        self.loading_more = false;
-        self.all_loaded = false;
         cx.notify();
     }
 
@@ -61,58 +41,16 @@ impl CommitList {
         self.on_select = Some(Box::new(callback));
     }
 
-    pub fn on_load_more(
-        &mut self,
-        batch_size: usize,
-        callback: impl Fn(&str) -> Vec<CommitInfo> + 'static,
-    ) {
-        self.batch_size = batch_size;
-        self.on_load_more = Some(Box::new(callback));
-    }
-
-    pub fn mark_all_loaded(&mut self) {
-        self.all_loaded = true;
-    }
-
     pub fn select_commit(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_index == Some(index) {
             return;
         }
         if let Some(commit) = self.commits.get(index) {
             self.selected_index = Some(index);
-            self.scroll_handle
-                .scroll_to_item(index, ScrollStrategy::Center);
             if let Some(ref on_select) = self.on_select {
                 on_select(commit, window, cx);
             }
         }
-        cx.notify();
-    }
-
-    fn check_load_more(&mut self, visible_end: usize, cx: &mut Context<Self>) {
-        if self.loading_more || self.all_loaded || self.commits.is_empty() {
-            return;
-        }
-        let remaining = self.commits.len().saturating_sub(visible_end);
-        if remaining > LOAD_MORE_THRESHOLD {
-            return;
-        }
-
-        let last_oid = match self.commits.last() {
-            Some(c) => c.oid.clone(),
-            None => return,
-        };
-        let new_commits = match self.on_load_more {
-            Some(ref loader) => loader(&last_oid),
-            None => return,
-        };
-
-        self.loading_more = true;
-        if new_commits.len() < self.batch_size {
-            self.all_loaded = true;
-        }
-        self.commits.extend(new_commits);
-        self.loading_more = false;
         cx.notify();
     }
 
@@ -186,36 +124,18 @@ impl CommitList {
 
 impl Render for CommitList {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let scroll_handle = self.scroll_handle.clone();
-        let item_count = self.commits.len();
+        let rows: Vec<_> = self
+            .commits
+            .iter()
+            .enumerate()
+            .map(|(i, commit)| self.render_commit_row(i, commit, cx))
+            .collect();
 
-        uniform_list(
-            "commit-list",
-            item_count,
-            cx.processor(|this, range: Range<usize>, window, cx| {
-                let visible_end = range.end;
-                let should_check =
-                    !this.loading_more && !this.all_loaded && !this.commits.is_empty();
-
-                let items: Vec<_> = range
-                    .map(|ix| {
-                        let commit = &this.commits[ix];
-                        this.render_commit_row(ix, commit, cx)
-                    })
-                    .collect();
-
-                if should_check {
-                    cx.defer_in(window, move |this, _window, cx| {
-                        this.check_load_more(visible_end, cx);
-                    });
-                }
-
-                items
-            }),
-        )
-        .h_full()
-        .w_full()
-        .track_scroll(scroll_handle)
+        v_flex()
+            .h_full()
+            .w_full()
+            .overflow_y_scrollbar()
+            .children(rows)
     }
 }
 

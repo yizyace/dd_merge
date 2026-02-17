@@ -181,13 +181,14 @@ impl DiffView {
             .map(|file| self.render_file_diff(file, cx))
             .collect();
 
-        let mut container = v_flex().size_full().overflow_y_scrollbar().gap_2();
-
-        if self.commit_info.is_some() {
-            container = container.child(self.render_commit_header(cx));
-        }
-
-        container.children(file_elements).into_any_element()
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_y_scrollbar()
+            .gap_2()
+            .children(file_elements)
+            .into_any_element()
     }
 
     fn render_file_diff(&self, file: &FileDiff, cx: &Context<Self>) -> impl IntoElement {
@@ -449,13 +450,14 @@ impl DiffView {
             .map(|file| self.render_file_diff_split(file, cx))
             .collect();
 
-        let mut container = v_flex().size_full().overflow_y_scrollbar().gap_2();
-
-        if self.commit_info.is_some() {
-            container = container.child(self.render_commit_header(cx));
-        }
-
-        container.children(file_elements).into_any_element()
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_y_scrollbar()
+            .gap_2()
+            .children(file_elements)
+            .into_any_element()
     }
 
     fn render_file_diff_split(&self, file: &FileDiff, cx: &Context<Self>) -> impl IntoElement {
@@ -657,6 +659,9 @@ impl Render for DiffView {
                 .w_full()
                 .h(px(0.)),
             )
+            .when(self.commit_info.is_some(), |el| {
+                el.child(self.render_commit_header(cx))
+            })
             .child(content)
             .into_any_element()
     }
