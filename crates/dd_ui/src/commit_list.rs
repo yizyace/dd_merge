@@ -131,6 +131,7 @@ impl CommitList {
                     .child(
                         gpui::div()
                             .text_sm()
+                            .truncate()
                             .text_color(if is_selected {
                                 cx.theme().accent_foreground
                             } else {
