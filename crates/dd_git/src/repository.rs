@@ -134,6 +134,69 @@ impl Repository {
         Ok(commits)
     }
 
+    pub fn commits_after(&self, after_oid: &str, limit: usize) -> Result<Vec<CommitInfo>> {
+        let head_id = self.inner.head_id()?;
+        let walk = self
+            .inner
+            .rev_walk([head_id])
+            .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                Default::default(),
+            ))
+            .all()?;
+
+        let mut found_cursor = false;
+        let mut commits = Vec::new();
+
+        for info in walk {
+            let info = info?;
+            let oid_hex = info.id.to_hex().to_string();
+
+            if !found_cursor {
+                if oid_hex == after_oid {
+                    found_cursor = true;
+                }
+                continue;
+            }
+
+            let commit = info.object()?;
+            let author = commit.author()?;
+            let committer = commit.committer()?;
+            let message = commit.message()?;
+            let tree_oid = commit.tree_id()?.to_hex().to_string();
+            let parent_oids: Vec<String> = info
+                .parent_ids
+                .iter()
+                .map(|id| id.to_hex().to_string())
+                .collect();
+
+            let short_oid = info.id.to_hex_with_len(7).to_string();
+
+            commits.push(CommitInfo {
+                oid: oid_hex,
+                short_oid,
+                tree_oid,
+                author_name: author.name.to_string(),
+                author_email: author.email.to_string(),
+                date: author.time.seconds,
+                committer_name: committer.name.to_string(),
+                committer_email: committer.email.to_string(),
+                committer_date: committer.time.seconds,
+                subject: message.title.to_str_lossy().trim().to_string(),
+                body: message
+                    .body
+                    .map(|b| b.to_str_lossy().trim().to_string())
+                    .unwrap_or_default(),
+                parent_oids,
+            });
+
+            if commits.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(commits)
+    }
+
     pub fn is_dirty(&self) -> Result<bool> {
         // Check tracked changes (staged + unstaged modifications) first via
         // the fast built-in check which skips the directory walk.
@@ -461,6 +524,36 @@ mod tests {
         assert_eq!(commits[0].committer_name, "Test User");
         assert_eq!(commits[0].committer_email, "test@test.com");
         assert!(commits[0].committer_date > 0);
+    }
+
+    #[test]
+    fn test_commits_after_returns_next_batch() {
+        let (_dir, repo) = init_test_repo_with_commits(10);
+        let first_batch = repo.commits(5).unwrap();
+        let last_oid = &first_batch.last().unwrap().oid;
+        let next_batch = repo.commits_after(last_oid, 5).unwrap();
+        assert_eq!(next_batch.len(), 5);
+        // The next batch should start right after the cursor commit
+        assert_ne!(next_batch[0].oid, *last_oid);
+        // Verify continuity: first item of next batch should be commit 4
+        // (commits are 9,8,7,6,5 in first batch, then 4,3,2,1,0 in next)
+        assert_eq!(next_batch[0].subject, "commit 4");
+    }
+
+    #[test]
+    fn test_commits_after_empty_at_end() {
+        let (_dir, repo) = init_test_repo_with_commits(3);
+        let all = repo.commits(3).unwrap();
+        let last_oid = &all.last().unwrap().oid;
+        let next = repo.commits_after(last_oid, 10).unwrap();
+        assert!(next.is_empty());
+    }
+
+    #[test]
+    fn test_commits_after_unknown_oid_returns_empty() {
+        let (_dir, repo) = init_test_repo_with_commits(3);
+        let next = repo.commits_after("0000000000000000000000000000000000000000", 10).unwrap();
+        assert!(next.is_empty());
     }
 
     #[test]

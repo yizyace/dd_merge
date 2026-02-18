@@ -10,7 +10,7 @@ use crate::commit_list::CommitList;
 use crate::diff_view::DiffView;
 use crate::sidebar::{Sidebar, SidebarData};
 
-const COMMIT_LIMIT: usize = 100;
+const COMMIT_LIMIT: usize = 200;
 
 const SIDEBAR_INITIAL_SIZE: f32 = 250.0;
 const SIDEBAR_MIN_SIZE: f32 = 40.0;
@@ -51,6 +51,7 @@ impl RepoView {
         view.load_repo_data(cx);
         view.setup_commit_selection(cx);
         view.setup_branch_checkout(cx);
+        view.setup_load_more(cx);
         view
     }
 
@@ -101,6 +102,23 @@ impl RepoView {
                         });
                     }
                 }
+            });
+        });
+    }
+
+    fn setup_load_more(&self, cx: &mut Context<Self>) {
+        let repo_path = self.path.clone();
+
+        self.commit_list.update(cx, |list, _cx| {
+            list.set_on_load_more(move |last_oid, window, cx| {
+                let repo_path = repo_path.clone();
+                let last_oid = last_oid.to_string();
+                cx.defer_in(window, move |list, _window, cx| {
+                    if let Ok(repo) = Repository::open(&repo_path) {
+                        let more = repo.commits_after(&last_oid, COMMIT_LIMIT).unwrap_or_default();
+                        list.append_commits(more, cx);
+                    }
+                });
             });
         });
     }
