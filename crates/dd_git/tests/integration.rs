@@ -301,6 +301,19 @@ fn merge_commit_has_two_parents() {
 }
 
 #[test]
+fn merge_commit_diff_is_not_empty() {
+    let f = &*FIXTURE;
+    let repo = Repository::open(&f.path).unwrap();
+    let diffs = repo.diff_commit(&f.merge_oid).unwrap();
+    assert!(!diffs.is_empty(), "merge commit diff should not be empty");
+    assert!(
+        diffs.iter().any(|d| d.path.contains("widgets.rs")),
+        "merge commit diff should contain widgets.rs: {:?}",
+        diffs.iter().map(|d| &d.path).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn root_commit_has_no_parents() {
     let f = &*FIXTURE;
     let repo = Repository::open(&f.path).unwrap();

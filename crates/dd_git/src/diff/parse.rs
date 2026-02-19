@@ -11,8 +11,27 @@ pub(crate) fn diff_commit(workdir: &Path, oid: &str) -> Result<Vec<FileDiff>> {
         "invalid commit OID: {oid}"
     );
 
+    // -m --first-parent: diff merge commits against their first parent.
+    // For non-merge commits these flags are no-ops.
+    let stdout = run_diff_tree(workdir, &["-m", "--first-parent"], oid)?;
+
+    // Empty output means root commit (no parent) — retry with --root.
+    let stdout = if stdout.trim().is_empty() {
+        run_diff_tree(workdir, &["--root"], oid)?
+    } else {
+        stdout
+    };
+
+    parse_unified_diff(&stdout)
+}
+
+fn run_diff_tree(workdir: &Path, extra_args: &[&str], oid: &str) -> Result<String> {
+    let mut args = vec!["diff-tree", "-p", "--no-commit-id", "-M"];
+    args.extend_from_slice(extra_args);
+    args.push(oid);
+
     let output = Command::new("git")
-        .args(["diff-tree", "-p", "--no-commit-id", "-M", oid])
+        .args(&args)
         .current_dir(workdir)
         .output()
         .context("failed to run git diff-tree")?;
@@ -22,26 +41,7 @@ pub(crate) fn diff_commit(workdir: &Path, oid: &str) -> Result<Vec<FileDiff>> {
         anyhow::bail!("git diff-tree failed: {}", stderr.trim());
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // If output is empty (root commit has no parent), retry with --root
-    if stdout.trim().is_empty() {
-        let output = Command::new("git")
-            .args(["diff-tree", "-p", "--no-commit-id", "--root", "-M", oid])
-            .current_dir(workdir)
-            .output()
-            .context("failed to run git diff-tree --root")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("git diff-tree --root failed: {}", stderr.trim());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return parse_unified_diff(&stdout);
-    }
-
-    parse_unified_diff(&stdout)
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 pub fn parse_unified_diff(input: &str) -> Result<Vec<FileDiff>> {
